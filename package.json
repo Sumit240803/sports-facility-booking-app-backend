@@ -1,0 +1,28 @@
+{
+  "name": "easyplay-backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev" : "nodemon --watch src --ext ts --exec tsx src/app.ts",
+    "start": "node dist/app.js",
+    "build" : "tsc"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.116.0",
+    "@types/express": "^5.0.6",
+    "dotenv": "^18.0.1",
+    "express": "^5.2.1",
+    "nodemon": "^3.1.14",
+    "tsx": "^4.23.15"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "typescript": "^7.0.2"
+  }
+}
