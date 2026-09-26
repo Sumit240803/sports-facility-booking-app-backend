@@ -4,26 +4,40 @@ import type { User } from '@supabase/supabase-js';
 export const USER_ROLES = ['player', 'venue_owner', 'admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
+export const USER_STATUSES = ['active', 'suspended'] as const;
+export type UserStatus = (typeof USER_STATUSES)[number];
+
 export interface Profile {
     id: string;
     email: string | null;
-    phone: string | null;
     full_name: string | null;
     avatar_url: string | null;
+    phone: string | null;
+    phone_verified: boolean;
     city: string | null;
+    preferred_sports: string[];
     role: UserRole;
+    status: UserStatus;
+    onboarded_at: string | null;
+    last_login_at: string | null;
     created_at: string;
     updated_at: string;
 }
 
-// Fields a user may change on their own profile (role is deliberately excluded)
-export const EDITABLE_PROFILE_FIELDS = ['full_name', 'avatar_url', 'city', 'phone'] as const;
-export type ProfileUpdate = Partial<Pick<Profile, (typeof EDITABLE_PROFILE_FIELDS)[number]>>;
+// Fields a user may change on their own profile (role/status are admin-only)
+export type ProfileUpdate = Partial<Pick<Profile, 'full_name' | 'avatar_url' | 'city' | 'phone' | 'preferred_sports'>>;
+export type AdminProfileUpdate = Partial<Pick<Profile, 'role' | 'status'>>;
 
 const TABLE = 'profiles';
 
 export const findProfileById = async (id: string): Promise<Profile | null> => {
     const { data, error } = await supabaseAdmin.from(TABLE).select('*').eq('id', id).maybeSingle();
+    if (error) throw error;
+    return data as Profile | null;
+};
+
+export const findProfileByEmail = async (email: string): Promise<Profile | null> => {
+    const { data, error } = await supabaseAdmin.from(TABLE).select('*').eq('email', email.toLowerCase()).maybeSingle();
     if (error) throw error;
     return data as Profile | null;
 };
@@ -39,8 +53,7 @@ export const getOrCreateProfile = async (user: User): Promise<Profile> => {
         .from(TABLE)
         .upsert({
             id: user.id,
-            email: user.email ?? null,
-            phone: user.phone || null,
+            email: user.email?.toLowerCase() ?? null,
             full_name: meta.full_name ?? meta.name ?? null,
             avatar_url: meta.avatar_url ?? meta.picture ?? null,
         })
@@ -50,13 +63,15 @@ export const getOrCreateProfile = async (user: User): Promise<Profile> => {
     return data as Profile;
 };
 
-export const updateProfile = async (id: string, changes: ProfileUpdate): Promise<Profile> => {
-    const { data, error } = await supabaseAdmin
-        .from(TABLE)
-        .update({ ...changes, updated_at: new Date().toISOString() })
-        .eq('id', id)
-        .select('*')
-        .single();
+export const updateProfile = async (
+    id: string,
+    changes: ProfileUpdate | AdminProfileUpdate | { onboarded_at?: string; last_login_at?: string },
+): Promise<Profile> => {
+    const { data, error } = await supabaseAdmin.from(TABLE).update(changes).eq('id', id).select('*').single();
     if (error) throw error;
     return data as Profile;
 };
+
+// Onboarding is complete once the user has given name, phone and city
+export const isOnboardingComplete = (p: Pick<Profile, 'full_name' | 'phone' | 'city'>): boolean =>
+    Boolean(p.full_name && p.phone && p.city);

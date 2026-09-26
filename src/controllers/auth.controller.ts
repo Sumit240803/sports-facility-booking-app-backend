@@ -3,18 +3,19 @@ import type { Provider, Session } from '@supabase/supabase-js';
 import { env } from '../config/env.js';
 import { AUTH_STORAGE_KEY, createAuthClient, supabaseAdmin } from '../lib/supabase.js';
 import {
-    EDITABLE_PROFILE_FIELDS,
     getOrCreateProfile,
+    isOnboardingComplete,
     updateProfile,
     type ProfileUpdate,
 } from '../models/user.model.js';
 import { getCookie } from '../utils/http.js';
+import { normalizePhone, PHONE_ERROR, PHONE_RE } from '../utils/validation.js';
 
 const OAUTH_PROVIDERS: Provider[] = ['google'];
 const PKCE_COOKIE = 'easyplay_pkce';
 const PKCE_STORAGE_KEY = `${AUTH_STORAGE_KEY}-code-verifier`;
 
-const PHONE_RE = /^\+[1-9]\d{7,14}$/; // E.164, e.g. +919876543210
+const MAX_PREFERRED_SPORTS = 10;
 
 const sessionResponse = async (session: Session) => ({
     access_token: session.access_token,
@@ -70,7 +71,14 @@ export const oauthCallback = async (req: Request, res: Response): Promise<void> 
     const { data, error } = await client.auth.exchangeCodeForSession(code);
     if (error || !data.session) { fail(error?.message ?? 'OAuth login failed'); return; }
 
-    await getOrCreateProfile(data.session.user);
+    const profile = await getOrCreateProfile(data.session.user);
+    if (profile.status === 'suspended') {
+        await supabaseAdmin.auth.admin.signOut(data.session.access_token, 'global');
+        fail('Account suspended');
+        return;
+    }
+    await updateProfile(profile.id, { last_login_at: new Date().toISOString() });
+
     const params = new URLSearchParams({
         access_token: data.session.access_token,
         refresh_token: data.session.refresh_token,
@@ -106,24 +114,52 @@ export const getMe = async (req: Request, res: Response): Promise<void> => {
     res.status(200).json({ user: req.user });
 };
 
-// PATCH /auth/me  (auth required)  { full_name?, avatar_url?, city?, phone? }
+// PATCH /auth/me  (auth required)
+// { full_name?, avatar_url?, city?, phone?, preferred_sports? }
+// onboarded_at is set automatically once full_name, phone and city are all present.
 export const updateMe = async (req: Request, res: Response): Promise<void> => {
+    const body = req.body ?? {};
     const changes: ProfileUpdate = {};
-    for (const field of EDITABLE_PROFILE_FIELDS) {
-        const value = req.body?.[field];
+
+    for (const field of ['full_name', 'avatar_url', 'city'] as const) {
+        const value = body[field];
         if (value === undefined) continue;
         if (value !== null && typeof value !== 'string') {
             res.status(400).json({ error: `${field} must be a string or null` });
             return;
         }
-        changes[field] = value === null ? null : value.trim();
+        changes[field] = value?.trim() || null;
     }
-    if (changes.phone && !PHONE_RE.test(changes.phone)) {
-        res.status(400).json({ error: 'Phone must be in E.164 format, e.g. +919876543210' });
-        return;
+
+    if (body.phone !== undefined) {
+        if (typeof body.phone !== 'string' || !PHONE_RE.test(normalizePhone(body.phone))) {
+            res.status(400).json({ error: PHONE_ERROR });
+            return;
+        }
+        changes.phone = normalizePhone(body.phone);
     }
+
+    if (body.preferred_sports !== undefined) {
+        const sports = body.preferred_sports;
+        if (!Array.isArray(sports) || sports.some((s) => typeof s !== 'string' || !s.trim())) {
+            res.status(400).json({ error: 'preferred_sports must be an array of strings' });
+            return;
+        }
+        const unique = [...new Set(sports.map((s: string) => s.trim().toLowerCase()))];
+        if (unique.length > MAX_PREFERRED_SPORTS) {
+            res.status(400).json({ error: `At most ${MAX_PREFERRED_SPORTS} preferred sports allowed` });
+            return;
+        }
+        changes.preferred_sports = unique;
+    }
+
     if (Object.keys(changes).length === 0) { res.status(400).json({ error: 'No valid fields to update' }); return; }
 
-    const user = await updateProfile(req.user!.id, changes);
+    const current = req.user!;
+    const onboarding = !current.onboarded_at && isOnboardingComplete({ ...current, ...changes })
+        ? { onboarded_at: new Date().toISOString() }
+        : {};
+
+    const user = await updateProfile(current.id, { ...changes, ...onboarding });
     res.status(200).json({ user });
 };

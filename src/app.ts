@@ -16,6 +16,8 @@ app.use((_req: Request, res: Response) => {
 // Express 5 forwards rejected async handlers here
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (err instanceof HttpError) { res.status(err.status).json({ error: err.message }); return; }
+    // Postgres unique violation, e.g. a phone number already used by another account
+    if ((err as { code?: string })?.code === '23505') { res.status(409).json({ error: 'Already in use' }); return; }
     console.error(err);
     res.status(500).json({ error: "Internal server error" });
 });
