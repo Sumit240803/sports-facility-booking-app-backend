@@ -35,4 +35,10 @@ export const env = {
     },
     // Background jobs (reminders, notification delivery). Safe to run on several instances.
     jobsEnabled: process.env.JOBS_ENABLED !== 'false',
+    booking: {
+        // Platform-funded discount on online payments; venues are paid on the full price
+        onlineDiscountPercent: 10,
+        // How long an unpaid online booking holds its slot
+        holdMinutes: 10,
+    },
 };

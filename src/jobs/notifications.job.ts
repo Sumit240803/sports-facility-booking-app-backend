@@ -1,6 +1,7 @@
 import { env } from '../config/env.js';
 import { EmailError, emailEnabled, sendEmail } from '../lib/email.js';
 import { pushEnabled, sendPush } from '../lib/push.js';
+import { processBookingJobs } from '../models/booking.model.js';
 import {
     claimDeliveries,
     completeDelivery,
@@ -46,11 +47,13 @@ const deliver = async (d: ClaimedDelivery): Promise<void> => {
 
 let running = false;
 
-// One tick: turn due reminders into notifications, then send pending email/push deliveries
+// One tick: booking housekeeping, due reminders -> notifications, then send pending email/push deliveries
 export const runNotificationsTick = async (): Promise<void> => {
     if (running) return; // never overlap ticks in this process
     running = true;
     try {
+        // Expire unpaid holds, complete finished bookings, queue 2-hour game reminders
+        for (let r = await processBookingJobs(BATCH); r.expired === BATCH || r.completed === BATCH || r.reminded === BATCH; r = await processBookingJobs(BATCH)) { /* keep draining */ }
         while ((await processDueReminders(BATCH)) === BATCH) { /* keep draining */ }
         for (let batch = await claimDeliveries(BATCH, LEASE_SECONDS); batch.length; batch = await claimDeliveries(BATCH, LEASE_SECONDS)) {
             await Promise.all(batch.map(deliver));

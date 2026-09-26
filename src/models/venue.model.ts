@@ -31,6 +31,9 @@ export interface VenueRow {
     booking_window_days: number;
     listing_window_days: number;
     min_notice_minutes: number;
+    pay_at_venue_enabled: boolean;
+    pay_at_venue_window_minutes: number;
+    cancellation_policy: { hours_before: number; refund_percent: number }[];
     status: VenueStatus;
     status_reason: string | null;
     submitted_at: string | null;
@@ -44,11 +47,12 @@ export interface VenueRow {
 export type VenueInput = Partial<Pick<VenueRow,
     'name' | 'description' | 'phone' | 'email' | 'address_line' | 'locality' | 'city' | 'state' |
     'pincode' | 'lat' | 'lng' | 'amenities' | 'rules' | 'timezone' |
-    'booking_window_days' | 'listing_window_days' | 'min_notice_minutes'>>;
+    'booking_window_days' | 'listing_window_days' | 'min_notice_minutes' |
+    'pay_at_venue_enabled' | 'pay_at_venue_window_minutes' | 'cancellation_policy'>>;
 
 // Every column except the generated PostGIS `location`, which PostgREST returns as hex WKB
-const VENUE_COLUMNS = 'id, owner_id, name, slug, description, phone, email, address_line, locality, city, state, pincode, lat, lng, amenities, rules, timezone, booking_window_days, listing_window_days, min_notice_minutes, status, status_reason, submitted_at, reviewed_by, reviewed_at, deleted_at, created_at, updated_at';
-const PUBLIC_VENUE_COLUMNS = 'id, name, slug, description, phone, email, address_line, locality, city, state, pincode, lat, lng, amenities, rules, timezone, booking_window_days, listing_window_days, min_notice_minutes, created_at';
+const VENUE_COLUMNS = 'id, owner_id, name, slug, description, phone, email, address_line, locality, city, state, pincode, lat, lng, amenities, rules, timezone, booking_window_days, listing_window_days, min_notice_minutes, pay_at_venue_enabled, pay_at_venue_window_minutes, cancellation_policy, status, status_reason, submitted_at, reviewed_by, reviewed_at, deleted_at, created_at, updated_at';
+const PUBLIC_VENUE_COLUMNS = 'id, name, slug, description, phone, email, address_line, locality, city, state, pincode, lat, lng, amenities, rules, timezone, booking_window_days, listing_window_days, min_notice_minutes, pay_at_venue_enabled, pay_at_venue_window_minutes, cancellation_policy, created_at';
 const PUBLIC_COURT_COLUMNS = 'id, name, sport_id, is_indoor, surface, capacity, base_slot_minutes, min_duration_minutes, max_duration_minutes, price_per_hour_paise, uses_venue_hours, sort_order';
 
 export const photoUrl = (key: string): string => publicUrl(key);

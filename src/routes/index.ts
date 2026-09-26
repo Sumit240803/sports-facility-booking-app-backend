@@ -3,6 +3,7 @@ import authRoutes from './auth.routes.js';
 import adminRoutes from './admin.routes.js';
 import { amenitiesRoutes, sportsRoutes } from './catalog.routes.js';
 import venueRoutes from './venue.routes.js';
+import bookingRoutes from './booking.routes.js';
 import meRoutes from './me.routes.js';
 import venueOwnerRoutes from './venueOwner.routes.js';
 
@@ -15,5 +16,6 @@ router.use('/sports', sportsRoutes);
 router.use('/amenities', amenitiesRoutes);
 router.use('/venues', venueRoutes);
 router.use('/me', meRoutes);
+router.use('/bookings', bookingRoutes);
 
 export default router;

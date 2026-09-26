@@ -56,6 +56,20 @@ const venueFields = {
     booking_window_days: z.number().int().min(1).max(7).optional(),
     listing_window_days: z.number().int().min(1).max(30).optional(),
     min_notice_minutes: z.number().int().min(0).max(1440).optional(),
+    // Pay at venue: can be switched off; opens this many minutes before a slot
+    pay_at_venue_enabled: z.boolean().optional(),
+    pay_at_venue_window_minutes: z.number().int().min(15).max(720).optional(),
+    // Refund tiers for player cancellations of paid bookings; [] = no refunds
+    cancellation_policy: z
+        .array(z.strictObject({ hours_before: z.number().int().min(0).max(168), refund_percent: z.number().int().min(0).max(100) }))
+        .max(5)
+        .transform((tiers) => [...tiers].sort((a, b) => b.hours_before - a.hours_before))
+        .refine((tiers) => new Set(tiers.map((t) => t.hours_before)).size === tiers.length, 'hours_before values must be unique')
+        .refine(
+            (tiers) => tiers.every((t, i) => i === 0 || t.refund_percent <= tiers[i - 1]!.refund_percent),
+            'Refunds cannot increase as the game gets closer',
+        )
+        .optional(),
 };
 
 const windowsValid = (v: { booking_window_days?: number | undefined; listing_window_days?: number | undefined }) =>

@@ -38,6 +38,7 @@ Venue owners list venues; venue staff manage day-to-day bookings; admins approve
 - DB invariants: listed venues keep required fields, ≥1 photo, ≥1 active court (triggers/RPCs raise `P0001`).
 - SQL functions are **revoked from anon/authenticated** (Supabase exposes them via REST otherwise); grant only
   to `service_role`. Default privileges already revoke new functions; still add explicit revoke/grant lines.
+- Lock order in SQL: court → venue → profile (never the reverse; avoids deadlocks).
 - Errors: `P0001` → 409 with the SQL message, `P0002` → 404.
 - Validation: zod via `parse()` in `src/utils/validate.ts`; use `z.strictObject` for bodies.
 
@@ -50,15 +51,29 @@ Venue owners list venues; venue staff manage day-to-day bookings; admins approve
 - Permissions: owner = everything; manager = venue details, courts, photos, hours, pricing, blocks;
   staff = blocks + read. Owner only: delete venue, submit/unpublish, staff management.
 
-## Phase 3 must add
-- Block deleting a venue/court, deactivating a court, or changing a court's sport/durations while it has future
-  confirmed bookings.
-- `get_availability()` must return `booked` for booked slots; blocks overlapping confirmed bookings must be
-  rejected (or handled explicitly); reminders must be cancelled if the slot gets booked before they fire.
+- Phase 3 (`004_bookings.sql`): `bookings` with exclusion constraint `bookings_no_overlap` (court + tstzrange,
+  ignoring cancelled/expired) = no double booking. Methods: `online` (10% platform-funded discount, 10-min
+  `pending_payment` hold), `pay_at_venue` (only inside venue `pay_at_venue_window_minutes`, switchable per venue,
+  max ONE upcoming per player), `offline` (staff walk-in). `prepare_booking()` validates + prices (quote),
+  `create_booking()` (idempotent per user+key), `cancel_booking()` (player: policy snapshot refund; venue/admin:
+  full refund), check-in / collect / manual no-show (+undo 24h). `booking_events` logs every status change.
+  `process_booking_jobs()` expires holds, completes finished bookings, sends 2h game reminders.
+  Guards: blocks can't cover bookings; courts can't be deactivated/deleted/change sport or slot length, venues
+  can't be deleted/unpublished with upcoming bookings; admin suspension cancels them with full refunds.
+- Staff cancel of bookings: owner/manager only. Everything else at the front desk: any staff.
+
+## Phase 4 must add
+- Confirm online bookings on successful payment (webhook). Holds: players see `expires_at` (10 min); the slot is
+  released only after `expires_at + hold_grace()` (5 min, `005_booking_races.sql`) so late webhooks for payments
+  made in time still confirm. Gateway checkout must time out at `expires_at`.
+- A payment for a booking that is cancelled/expired (player cancelled mid-payment, or paid after the grace and the
+  slot was taken) must be refunded automatically; re-confirm only if still pending or the slot is still free.
+- Process `refund_status = 'pending'` refunds. Lock the booking row (`for update`) in every payment handler.
+- Venue payouts are on `subtotal_paise` (the platform absorbs `discount_paise`).
 
 ## Roadmap
 1. Venues & courts (browse, owner CRUD, photos, admin review) ← done
 2. Availability & pricing (hours, price rules, blocks, computed slots, reminders, notifications) ← done
-3. Bookings (exclusion constraint against double booking, holds, staff check-in, cancellation policy)
+3. Bookings (exclusion constraint against double booking, holds, staff check-in, cancellation policy) ← done
 4. Payments (Razorpay, webhooks, refunds, payouts)
 5. Reviews, favourites, notifications, owner dashboard

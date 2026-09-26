@@ -1,3 +1,4 @@
+import { env } from '../config/env.js';
 import { supabaseAdmin } from '../lib/supabase.js';
 import { minutesToTime } from '../utils/validate.js';
 
@@ -143,7 +144,7 @@ export const findPublicVenueSchedule = async (key: { id: string } | { slug: stri
     return schedule;
 };
 
-interface SlotRow { court_id: string; slot_start: string; slot_end: string; price_paise: number; status: string; opens_at: string }
+interface SlotRow { court_id: string; slot_start: string; slot_end: string; price_paise: number; status: string; opens_at: string; pay_at_venue_open: boolean }
 
 export const getAvailability = async (venueId: string, date: string, courtId?: string) => {
     const [slots, courts] = await Promise.all([
@@ -175,7 +176,10 @@ export const getAvailability = async (venueId: string, date: string, courtId?: s
                 start: s.slot_start,
                 end: s.slot_end,
                 price_paise: s.price_paise,
+                // Indicative per-slot online price; the exact total comes from the booking quote
+                online_price_paise: s.price_paise - Math.round((s.price_paise * env.booking.onlineDiscountPercent) / 100),
                 status: s.status,
+                pay_at_venue: s.pay_at_venue_open,
                 ...(s.status === 'not_yet_open' ? { opens_at: s.opens_at } : {}),
             })),
         }));

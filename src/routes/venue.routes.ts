@@ -1,4 +1,5 @@
 import express from 'express';
+import * as bookingController from '../controllers/booking.controller.js';
 import * as courtController from '../controllers/court.controller.js';
 import * as scheduleController from '../controllers/schedule.controller.js';
 import * as photoController from '../controllers/venuePhoto.controller.js';
@@ -46,6 +47,17 @@ router.put('/:venueId/courts/:courtId/pricing', ...managers, scheduleController.
 router.get('/:venueId/blocks', ...anyStaff, scheduleController.getBlocks);
 router.post('/:venueId/blocks', ...anyStaff, scheduleController.postBlock);
 router.delete('/:venueId/blocks/:blockId', ...anyStaff, scheduleController.removeBlock);
+
+// Bookings (front desk)
+router.get('/:venueId/bookings', ...anyStaff, bookingController.venueBookings);
+router.post('/:venueId/bookings', ...anyStaff, bookingController.createOffline);
+router.get('/:venueId/bookings/by-reference/:reference', ...anyStaff, bookingController.venueBookingByReference);
+router.get('/:venueId/bookings/:bookingId', ...anyStaff, bookingController.venueBooking);
+router.post('/:venueId/bookings/:bookingId/check-in', ...anyStaff, bookingController.checkIn);
+router.post('/:venueId/bookings/:bookingId/collect', ...anyStaff, bookingController.collect);
+router.post('/:venueId/bookings/:bookingId/no-show', ...anyStaff, bookingController.noShow);
+router.post('/:venueId/bookings/:bookingId/undo-no-show', ...anyStaff, bookingController.undoNoShowBooking);
+router.post('/:venueId/bookings/:bookingId/cancel', ...managers, bookingController.cancelByVenue);
 
 // Photos
 router.get('/:venueId/photos', ...anyStaff, photoController.list);

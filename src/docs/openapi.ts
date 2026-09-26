@@ -1,6 +1,7 @@
 // OpenAPI 3.1 spec served at /api/docs. Keep in sync with routes: every new or changed
 // endpoint must be documented here. Request bodies reuse the controllers' zod schemas.
 import { z } from 'zod';
+import * as booking from '../controllers/booking.controller.js';
 import * as catalog from '../controllers/catalog.controller.js';
 import * as court from '../controllers/court.controller.js';
 import * as me from '../controllers/me.controller.js';
@@ -127,6 +128,14 @@ const schemas: Record<string, Json> = {
         booking_window_days: { type: 'integer', minimum: 1, maximum: 7, description: 'Bookings open this many days ahead (today counts as day 1)' },
         listing_window_days: { type: 'integer', minimum: 1, maximum: 30, description: 'Slots are visible this many days ahead' },
         min_notice_minutes: { type: 'integer', minimum: 0, maximum: 1440, description: 'No booking of slots starting sooner than this' },
+        pay_at_venue_enabled: { type: 'boolean' },
+        pay_at_venue_window_minutes: { type: 'integer', minimum: 15, maximum: 720, description: 'Pay at venue opens this many minutes before a slot' },
+        cancellation_policy: {
+            type: 'array',
+            items: obj({ hours_before: { type: 'integer' }, refund_percent: { type: 'integer' } }),
+            description: 'Refund tiers for player cancellations of paid bookings; first tier whose notice is met wins; otherwise 0%',
+            example: [{ hours_before: 24, refund_percent: 100 }, { hours_before: 6, refund_percent: 50 }],
+        },
         status: { type: 'string', enum: ['draft', 'pending_review', 'live', 'rejected', 'suspended'] },
         status_reason: { type: ['string', 'null'] },
         submitted_at: { type: ['string', 'null'], format: 'date-time' },
@@ -201,8 +210,10 @@ const schemas: Record<string, Json> = {
     Slot: obj({
         start: { type: 'string', format: 'date-time' },
         end: { type: 'string', format: 'date-time' },
-        price_paise: { type: 'integer', description: 'Price of this one slot' },
-        status: { type: 'string', enum: ['available', 'not_yet_open', 'closed', 'blocked', 'past'], description: 'closed = inside minimum notice; not_yet_open = listed, booking opens at opens_at' },
+        price_paise: { type: 'integer', description: 'Price of this one slot (pay at venue)' },
+        online_price_paise: { type: 'integer', description: 'Indicative price with the online discount; the booking quote has the exact total' },
+        pay_at_venue: { type: 'boolean', description: 'Pay at venue is possible for this slot right now' },
+        status: { type: 'string', enum: ['available', 'booked', 'not_yet_open', 'closed', 'blocked', 'past'], description: 'closed = inside minimum notice; not_yet_open = listed, booking opens at opens_at' },
         opens_at: { type: 'string', format: 'date-time', description: 'Only for not_yet_open' },
     }),
     Availability: obj({
@@ -214,6 +225,7 @@ const schemas: Record<string, Json> = {
         bookable_until: { type: 'string', format: 'date' },
         listed_until: { type: 'string', format: 'date' },
         min_notice_minutes: { type: 'integer' },
+        online_discount_percent: { type: 'integer' },
         courts: {
             type: 'array',
             items: obj({
@@ -243,6 +255,73 @@ const schemas: Record<string, Json> = {
         data: { type: 'object' },
         read_at: { type: ['string', 'null'], format: 'date-time' },
         created_at: { type: 'string', format: 'date-time' },
+    }),
+    Booking: obj({
+        id: { type: 'string', format: 'uuid' },
+        reference: { type: 'string', example: 'EP-7K3M9Q', description: 'Show as QR / text for check-in' },
+        venue_id: { type: 'string', format: 'uuid' },
+        court_id: { type: 'string', format: 'uuid' },
+        user_id: { type: ['string', 'null'], format: 'uuid' },
+        customer_name: { type: ['string', 'null'], description: 'Walk-in bookings' },
+        customer_phone: { type: ['string', 'null'] },
+        starts_at: { type: 'string', format: 'date-time' },
+        ends_at: { type: 'string', format: 'date-time' },
+        slot_date: { type: 'string', format: 'date' },
+        duration_minutes: { type: 'integer' },
+        status: { type: 'string', enum: ['pending_payment', 'confirmed', 'checked_in', 'completed', 'cancelled', 'expired', 'no_show'] },
+        payment_method: { type: 'string', enum: ['online', 'pay_at_venue', 'offline'] },
+        payment_status: { type: 'string', enum: ['pending', 'paid', 'due', 'collected'] },
+        subtotal_paise: { type: 'integer' },
+        discount_percent: { type: 'integer' },
+        discount_paise: { type: 'integer' },
+        total_paise: { type: 'integer', description: 'Amount the player pays' },
+        slots: { type: 'array', items: obj({ start: { type: 'string' }, end: { type: 'string' }, price_paise: { type: 'integer' } }) },
+        cancellation_policy: { type: 'array', items: obj({ hours_before: { type: 'integer' }, refund_percent: { type: 'integer' } }), description: 'Snapshot at booking time' },
+        expires_at: { type: ['string', 'null'], format: 'date-time', description: 'Online bookings: pay before this or the slot is released' },
+        notes: { type: ['string', 'null'] },
+        checked_in_at: { type: ['string', 'null'], format: 'date-time' },
+        collected_paise: { type: ['integer', 'null'] },
+        cancelled_at: { type: ['string', 'null'], format: 'date-time' },
+        cancelled_by_role: { type: ['string', 'null'], enum: ['player', 'venue', 'admin', 'system', null] },
+        cancel_reason: { type: ['string', 'null'] },
+        refund_percent: { type: ['integer', 'null'] },
+        refund_paise: { type: ['integer', 'null'] },
+        refund_status: { type: 'string', enum: ['none', 'pending', 'processed', 'failed'] },
+        created_at: { type: 'string', format: 'date-time' },
+    }),
+    PlayerBooking: {
+        allOf: [
+            ref('Booking'),
+            obj({
+                court: obj({ id: { type: 'string' }, name: { type: 'string' }, sport_id: { type: 'string' } }),
+                venue: obj({ id: { type: 'string' }, name: { type: 'string' }, slug: { type: 'string' }, address_line: { type: 'string' }, city: { type: 'string' }, phone: { type: 'string' }, timezone: { type: 'string' } }),
+                cancellation: obj({ allowed: { type: 'boolean' }, refund_percent: { type: 'integer' }, refund_paise: { type: 'integer' } }, []),
+            }),
+        ],
+    },
+    VenueBooking: {
+        allOf: [
+            ref('Booking'),
+            obj({
+                court: obj({ id: { type: 'string' }, name: { type: 'string' }, sport_id: { type: 'string' } }),
+                customer: { type: ['object', 'null'], properties: { id: { type: 'string' }, full_name: { type: 'string' }, phone: { type: 'string' }, email: { type: 'string' } } },
+                events: { type: 'array', items: obj({ from_status: { type: ['string', 'null'] }, to_status: { type: 'string' }, actor_id: { type: ['string', 'null'] }, note: { type: ['string', 'null'] }, created_at: { type: 'string' } }), description: 'Detail endpoints only' },
+            }),
+        ],
+    },
+    Quote: obj({
+        court_id: { type: 'string', format: 'uuid' },
+        slot_date: { type: 'string', format: 'date' },
+        starts_at: { type: 'string', format: 'date-time' },
+        ends_at: { type: 'string', format: 'date-time' },
+        duration_minutes: { type: 'integer' },
+        payment_method: { type: 'string' },
+        slots: { type: 'array', items: obj({ start: { type: 'string' }, end: { type: 'string' }, price_paise: { type: 'integer' } }) },
+        subtotal_paise: { type: 'integer' },
+        discount_percent: { type: 'integer' },
+        discount_paise: { type: 'integer' },
+        total_paise: { type: 'integer' },
+        cancellation_policy: { type: 'array', items: { type: 'object' } },
     }),
     StaffList: obj({
         members: { type: 'array', items: obj({ role: { type: 'string', enum: ['manager', 'staff'] }, created_at: { type: 'string' }, user: ref('Profile') }) },
@@ -292,6 +371,7 @@ export const openApiSpec: Json = {
         { name: 'Auth' }, { name: 'Profile' }, { name: 'Owner applications' }, { name: 'Catalog' },
         { name: 'Venues (public)' }, { name: 'Venues (manage)' }, { name: 'Courts' }, { name: 'Photos' },
         { name: 'Hours & pricing' }, { name: 'Blocks' }, { name: 'Availability' },
+        { name: 'Bookings' }, { name: 'Front desk' },
         { name: 'Staff' }, { name: 'Me' }, { name: 'Admin' },
     ],
     components: {
@@ -427,7 +507,7 @@ export const openApiSpec: Json = {
                 security: auth, parameters: [venueId], requestBody: body(fromZod(venue.updateSchema)),
                 responses: { 200: venueRes, 400: E[400], 403: E[403], 404: E[404], 409: E[409] },
             }),
-            delete: op('Venues (manage)', 'Delete venue (soft, owner only)', { security: auth, parameters: [venueId], responses: { 204: { description: 'Deleted' }, 403: E[403], 404: E[404] } }),
+            delete: op('Venues (manage)', 'Delete venue (soft, owner only)', { security: auth, parameters: [venueId], responses: { 204: { description: 'Deleted' }, 403: E[403], 404: E[404], 409: err('Venue has upcoming bookings') } }),
         },
         '/venues/{venueId}/manage': {
             get: op('Venues (manage)', 'Full venue incl. drafts, inactive courts (owner, admin, staff)', {
@@ -443,7 +523,7 @@ export const openApiSpec: Json = {
         },
         '/venues/{venueId}/unpublish': {
             post: op('Venues (manage)', 'Take venue off the public listing', {
-                description: 'live/pending_review → draft. Not allowed for suspended venues.',
+                description: 'live/pending_review → draft. Not allowed for suspended venues or while there are upcoming bookings.',
                 security: auth, parameters: [venueId], responses: { 200: venueRes, 403: E[403], 404: E[404], 409: E[409] },
             }),
         },
@@ -460,11 +540,11 @@ export const openApiSpec: Json = {
         '/venues/{venueId}/courts/{courtId}': {
             patch: op('Courts', 'Update court (owner, manager)', {
                 security: auth, parameters: [venueId, pathParam('courtId', 'Court id', 'uuid')], requestBody: body(fromZod(court.updateSchema)),
-                responses: { 200: ok('Updated', obj({ court: ref('Court') })), 400: E[400], 404: E[404], 409: err('Name taken, or last active court of a listed venue') },
+                responses: { 200: ok('Updated', obj({ court: ref('Court') })), 400: E[400], 404: E[404], 409: err('Name taken, last active court of a listed venue, or deactivating / changing sport or slot length with upcoming bookings') },
             }),
             delete: op('Courts', 'Delete court (soft, owner, manager)', {
                 security: auth, parameters: [venueId, pathParam('courtId', 'Court id', 'uuid')],
-                responses: { 204: { description: 'Deleted' }, 404: E[404], 409: err('Last active court of a listed venue') },
+                responses: { 204: { description: 'Deleted' }, 404: E[404], 409: err('Last active court of a listed venue, or upcoming bookings') },
             }),
         },
 
@@ -531,7 +611,7 @@ export const openApiSpec: Json = {
                 responses: { 200: ok('Blocks', obj({ blocks: { type: 'array', items: ref('Block') } })), 400: E[400] },
             }),
             post: op('Blocks', 'Block a court or close the whole venue (any staff)', {
-                description: 'Omit court_id to close the whole venue (e.g. a holiday). Max 62 days; must end in the future.',
+                description: 'Omit court_id to close the whole venue (e.g. a holiday). Max 62 days; must end in the future. Cannot overlap active bookings (cancel them first).',
                 security: auth, parameters: [venueId], requestBody: body(fromZod(schedule.blockSchema)),
                 responses: { 201: ok('Created', obj({ block: ref('Block') })), 400: E[400], 404: err('Court not found') },
             }),
@@ -588,6 +668,112 @@ export const openApiSpec: Json = {
             delete: op('Me', 'Unregister this device (call on logout)', { security: auth, requestBody: body(fromZod(me.removePushTokenSchema)), responses: { 204: { description: 'Removed' }, 400: E[400] } }),
         },
 
+        // ---------------- Bookings (player) ----------------
+        '/bookings/quote': {
+            post: op('Bookings', 'Price and validate a booking without creating it', {
+                security: auth, requestBody: body(fromZod(booking.playerBookingSchema)),
+                responses: { 200: ok('Quote', obj({ quote: ref('Quote') })), 400: E[400], 404: err('Court or slot not found'), 409: err('Slot not bookable (booked, blocked, not open yet, pay-at-venue rules, …)'), 429: err('Too many attempts') },
+            }),
+        },
+        '/bookings': {
+            post: op('Bookings', 'Book a court', {
+                description: [
+                    '`date` is the availability date the slot is listed under; `start` must be a slot start; duration a multiple of the court slot length within its min/max.',
+                    '**online**: 10% off (platform-funded); status `pending_payment`, holds the slot until `expires_at` (10 min). Payment confirms it (Phase 4).',
+                    '**pay_at_venue**: confirmed immediately; only when the venue allows it, within its pay-at-venue window before the slot, and only one upcoming pay-at-venue booking per player.',
+                    'Send an `Idempotency-Key` header (8-100 chars) so retries never double book; a repeat returns the same booking. Requires a completed profile. 20 attempts/min per user.',
+                ].join('\n\n'),
+                security: auth,
+                parameters: [{ name: 'Idempotency-Key', in: 'header', required: false, schema: { type: 'string' } }],
+                requestBody: body(fromZod(booking.playerBookingSchema)),
+                responses: { 201: ok('Booked', obj({ booking: ref('Booking') })), 400: E[400], 404: E[404], 409: err('Slot already booked or not bookable'), 429: err('Too many attempts') },
+            }),
+        },
+        '/me/bookings': {
+            get: op('Bookings', 'My bookings', {
+                security: auth, parameters: [query('scope', { type: 'string', enum: ['upcoming', 'past'], default: 'upcoming' }), ...pageParams],
+                responses: { 200: ok('Bookings', obj({ bookings: { type: 'array', items: ref('PlayerBooking') }, total: { type: 'integer' }, page: { type: 'integer' }, limit: { type: 'integer' } })) },
+            }),
+        },
+        '/me/bookings/{id}': {
+            get: op('Bookings', 'My booking, with what a cancellation would refund now', {
+                security: auth, parameters: [pathParam('id', 'Booking id', 'uuid')], responses: { 200: ok('Booking', obj({ booking: ref('PlayerBooking') })), 404: E[404] },
+            }),
+        },
+        '/me/bookings/{id}/cancel': {
+            post: op('Bookings', 'Cancel my booking', {
+                description: 'Before the start only. Paid bookings are refunded per the policy snapshot on the booking.',
+                security: auth, parameters: [pathParam('id', 'Booking id', 'uuid')],
+                requestBody: { required: false, ...json(obj({ reason: { type: 'string' } })) },
+                responses: { 200: ok('Cancelled', obj({ booking: ref('Booking') })), 404: E[404], 409: E[409] },
+            }),
+        },
+
+        // ---------------- Front desk (venue staff) ----------------
+        '/venues/{venueId}/bookings': {
+            get: op('Front desk', 'Bookings for a local day or a time range (any staff)', {
+                security: auth,
+                parameters: [
+                    venueId,
+                    query('date', { type: 'string', format: 'date' }, 'Venue-local day (default today)'),
+                    query('from', { type: 'string', format: 'date-time' }),
+                    query('to', { type: 'string', format: 'date-time' }, 'Max 31 days after from'),
+                    query('status', { type: 'string' }, 'Comma-separated statuses'),
+                ],
+                responses: { 200: ok('Bookings', obj({ from: { type: 'string' }, to: { type: 'string' }, bookings: { type: 'array', items: ref('VenueBooking') } })), 400: E[400], 403: E[403] },
+            }),
+            post: op('Front desk', 'Walk-in / phone booking (any staff)', {
+                description: 'Confirmed immediately, paid at the venue. Can book a slot that is already running, inside the minimum notice, or beyond the booking window (within the listing window). Never overlaps other bookings or blocks.',
+                security: auth, parameters: [venueId], requestBody: body(fromZod(booking.offlineBookingSchema)),
+                responses: { 201: ok('Booked', obj({ booking: ref('Booking') })), 400: E[400], 404: E[404], 409: E[409] },
+            }),
+        },
+        '/venues/{venueId}/bookings/by-reference/{reference}': {
+            get: op('Front desk', 'Find a booking by reference / QR (any staff)', {
+                security: auth, parameters: [venueId, pathParam('reference', 'e.g. EP-7K3M9Q (case-insensitive)')], responses: { 200: ok('Booking', obj({ booking: ref('VenueBooking') })), 404: E[404] },
+            }),
+        },
+        '/venues/{venueId}/bookings/{bookingId}': {
+            get: op('Front desk', 'Booking detail with status history (any staff)', {
+                security: auth, parameters: [venueId, pathParam('bookingId', 'Booking id', 'uuid')], responses: { 200: ok('Booking', obj({ booking: ref('VenueBooking') })), 404: E[404] },
+            }),
+        },
+        '/venues/{venueId}/bookings/{bookingId}/check-in': {
+            post: op('Front desk', 'Check in (any staff)', {
+                description: 'From 30 min before start until the end. Optionally record the amount collected for pay-at-venue / walk-in bookings.',
+                security: auth, parameters: [venueId, pathParam('bookingId', 'Booking id', 'uuid')],
+                requestBody: { required: false, ...json(obj({ collected_paise: { type: 'integer' } })) },
+                responses: { 200: ok('Checked in', obj({ booking: ref('Booking') })), 404: E[404], 409: E[409] },
+            }),
+        },
+        '/venues/{venueId}/bookings/{bookingId}/collect': {
+            post: op('Front desk', 'Record payment collected at the venue (any staff)', {
+                security: auth, parameters: [venueId, pathParam('bookingId', 'Booking id', 'uuid')],
+                requestBody: body(obj({ amount_paise: { type: 'integer' } }, ['amount_paise'])),
+                responses: { 200: ok('Collected', obj({ booking: ref('Booking') })), 404: E[404], 409: E[409] },
+            }),
+        },
+        '/venues/{venueId}/bookings/{bookingId}/no-show': {
+            post: op('Front desk', 'Mark no-show (any staff)', {
+                description: 'After the start and up to 24h after the end, only if never checked in. Paid time is never released.',
+                security: auth, parameters: [venueId, pathParam('bookingId', 'Booking id', 'uuid')], responses: { 200: ok('Marked', obj({ booking: ref('Booking') })), 404: E[404], 409: E[409] },
+            }),
+        },
+        '/venues/{venueId}/bookings/{bookingId}/undo-no-show': {
+            post: op('Front desk', 'Undo no-show (any staff)', {
+                description: 'Within 24h after the end. Becomes checked_in (or completed if already over).',
+                security: auth, parameters: [venueId, pathParam('bookingId', 'Booking id', 'uuid')], responses: { 200: ok('Undone', obj({ booking: ref('Booking') })), 404: E[404], 409: E[409] },
+            }),
+        },
+        '/venues/{venueId}/bookings/{bookingId}/cancel': {
+            post: op('Front desk', 'Cancel a booking as the venue (owner, manager)', {
+                description: 'Before the booking ends; always a full refund of anything paid; the player is notified.',
+                security: auth, parameters: [venueId, pathParam('bookingId', 'Booking id', 'uuid')],
+                requestBody: body(obj({ reason: { type: 'string' } }, ['reason'])),
+                responses: { 200: ok('Cancelled', obj({ booking: ref('Booking') })), 400: E[400], 403: E[403], 404: E[404], 409: E[409] },
+            }),
+        },
+
         // ---------------- Staff ----------------
         '/venues/{venueId}/staff': {
             get: op('Staff', 'List staff and pending invites (owner, admin, manager)', { security: auth, parameters: [venueId], responses: { 200: ok('Staff', ref('StaffList')), 403: E[403] } }),
@@ -620,7 +806,7 @@ export const openApiSpec: Json = {
         },
         '/admin/venues/{venueId}/approve': reviewAction('approve', 'Approve venue (pending_review → live)', false),
         '/admin/venues/{venueId}/reject': reviewAction('reject', 'Reject venue (pending_review → rejected)', true),
-        '/admin/venues/{venueId}/suspend': reviewAction('suspend', 'Suspend venue (live/pending_review → suspended)', true),
+        '/admin/venues/{venueId}/suspend': reviewAction('suspend', 'Suspend venue (live/pending_review → suspended); cancels upcoming bookings with full refunds and notifies players', true),
         '/admin/venues/{venueId}/reinstate': reviewAction('reinstate', 'Reinstate suspended venue (→ live)', false),
     },
 };

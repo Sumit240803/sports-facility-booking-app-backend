@@ -17,6 +17,7 @@ import {
     type PriceRuleInput,
     type VenueSchedule,
 } from '../models/schedule.model.js';
+import { env } from '../config/env.js';
 import { HttpError } from '../utils/http.js';
 import { addDays, cleanText, isoDate, parse, timeOfDay, todayIn, uuidParam } from '../utils/validate.js';
 import { UUID_RE } from '../utils/validation.js';
@@ -184,6 +185,7 @@ const availabilityResponse = async (venue: VenueSchedule, date: string, courtId:
         bookable_until: addDays(today, venue.booking_window_days - 1),
         listed_until: addDays(today, venue.listing_window_days - 1),
         min_notice_minutes: venue.min_notice_minutes,
+        online_discount_percent: env.booking.onlineDiscountPercent,
         courts: await getAvailability(venue.id, date, courtId),
     };
 };
