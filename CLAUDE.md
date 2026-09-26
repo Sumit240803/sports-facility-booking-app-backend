@@ -62,18 +62,21 @@ Venue owners list venues; venue staff manage day-to-day bookings; admins approve
   can't be deleted/unpublished with upcoming bookings; admin suspension cancels them with full refunds.
 - Staff cancel of bookings: owner/manager only. Everything else at the front desk: any staff.
 
-## Phase 4 must add
-- Confirm online bookings on successful payment (webhook). Holds: players see `expires_at` (10 min); the slot is
-  released only after `expires_at + hold_grace()` (5 min, `005_booking_races.sql`) so late webhooks for payments
-  made in time still confirm. Gateway checkout must time out at `expires_at`.
-- A payment for a booking that is cancelled/expired (player cancelled mid-payment, or paid after the grace and the
-  slot was taken) must be refunded automatically; re-confirm only if still pending or the slot is still free.
-- Process `refund_status = 'pending'` refunds. Lock the booking row (`for update`) in every payment handler.
-- Venue payouts are on `subtotal_paise` (the platform absorbs `discount_paise`).
+- Phase 4 (`006_payments.sql`): Razorpay via plain HTTPS (`src/lib/razorpay.ts`, `RAZORPAY_API_BASE` overridable
+  for tests). `payments` (per order), `refunds` (max one per payment, outbox with lease + retries; retries first
+  look for an existing Razorpay refund tagged with our id), `webhook_events` (dedupe). `record_payment_captured()`
+  confirms the booking or queues an automatic refund (amount mismatch, duplicate, cancelled, started, slot taken /
+  blocked / venue not live when reviving a lapsed hold). Hold: players see 10 min, slot released after +5 min grace.
+  Webhook at `/api/payments/webhook` uses the raw body. Job reconciles orders with no final state (lost webhooks).
+- Money: commission 10% (`platform_commission_percent()`, snapshot `bookings.commission_percent`). One
+  `venue_ledger` row per booking, recomputed by trigger (`booking_venue_net()`): online credits subtotal - commission
+  when final (partial on player cancellation); completed pay-at-venue debits commission; walk-ins nothing.
+  Payouts: `manual` (admin records transfer + UTR) or `route` (daily automatic Razorpay transfer of the balance;
+  unknown outcomes stay `processing` for admin resolve, never retried automatically).
 
 ## Roadmap
 1. Venues & courts (browse, owner CRUD, photos, admin review) ← done
 2. Availability & pricing (hours, price rules, blocks, computed slots, reminders, notifications) ← done
 3. Bookings (exclusion constraint against double booking, holds, staff check-in, cancellation policy) ← done
-4. Payments (Razorpay, webhooks, refunds, payouts)
+4. Payments (Razorpay, webhooks, refunds, payouts) ← done
 5. Reviews, favourites, notifications, owner dashboard

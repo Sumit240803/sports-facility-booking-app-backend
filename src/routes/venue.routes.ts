@@ -1,6 +1,7 @@
 import express from 'express';
 import * as bookingController from '../controllers/booking.controller.js';
 import * as courtController from '../controllers/court.controller.js';
+import * as payoutController from '../controllers/payout.controller.js';
 import * as scheduleController from '../controllers/schedule.controller.js';
 import * as photoController from '../controllers/venuePhoto.controller.js';
 import * as venueController from '../controllers/venue.controller.js';
@@ -65,6 +66,11 @@ router.post('/:venueId/photos', ...managers, photoController.receivePhoto, photo
 router.put('/:venueId/photos/order', ...managers, photoController.reorder);
 router.put('/:venueId/photos/:photoId/cover', ...managers, photoController.makeCover);
 router.delete('/:venueId/photos/:photoId', ...managers, photoController.remove);
+
+// Earnings & payouts (owner only)
+router.get('/:venueId/earnings', ...ownerOnly, payoutController.earnings);
+router.get('/:venueId/payout-settings', ...ownerOnly, payoutController.getSettings);
+router.put('/:venueId/payout-settings', ...ownerOnly, payoutController.putSettings);
 
 // Staff (owner only)
 router.use('/:venueId/staff', venueStaffRoutes);

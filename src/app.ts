@@ -3,6 +3,7 @@ import multer from "multer";
 import swaggerUi from "swagger-ui-express";
 import { env } from "./config/env.js";
 import { openApiSpec } from "./docs/openapi.js";
+import { webhook as razorpayWebhook } from "./controllers/payment.controller.js";
 import { startNotificationsJob } from "./jobs/notifications.job.js";
 import router from "./routes/index.js";
 import { HttpError } from "./utils/http.js";
@@ -10,6 +11,9 @@ import { HttpError } from "./utils/http.js";
 const app = express();
 
 app.disable("x-powered-by");
+// Razorpay webhook: raw body (signature is over the exact bytes), mounted before the JSON parser
+app.post("/api/payments/webhook", express.raw({ type: "application/json", limit: "1mb" }), razorpayWebhook);
+
 app.use(express.json({ limit: "100kb" }));
 
 // API docs: Swagger UI at /api/docs, raw spec at /api/openapi.json

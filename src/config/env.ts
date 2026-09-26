@@ -35,6 +35,18 @@ export const env = {
     },
     // Background jobs (reminders, notification delivery). Safe to run on several instances.
     jobsEnabled: process.env.JOBS_ENABLED !== 'false',
+    // Razorpay (optional until configured; online payment endpoints return 503 without it)
+    razorpay: {
+        keyId: process.env.RAZORPAY_KEY_ID || null,
+        keySecret: process.env.RAZORPAY_KEY_SECRET || null,
+        webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET || null,
+        apiBase: (process.env.RAZORPAY_API_BASE || 'https://api.razorpay.com/v1').replace(/\/+$/, ''),
+    },
+    payouts: {
+        // Automatic Route payouts: minimum balance and how often per venue
+        routeMinPaise: 10_000,
+        routeEveryHours: 24,
+    },
     booking: {
         // Platform-funded discount on online payments; venues are paid on the full price
         onlineDiscountPercent: 10,

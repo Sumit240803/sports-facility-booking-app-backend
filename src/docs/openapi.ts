@@ -5,6 +5,8 @@ import * as booking from '../controllers/booking.controller.js';
 import * as catalog from '../controllers/catalog.controller.js';
 import * as court from '../controllers/court.controller.js';
 import * as me from '../controllers/me.controller.js';
+import * as payment from '../controllers/payment.controller.js';
+import * as payout from '../controllers/payout.controller.js';
 import * as schedule from '../controllers/schedule.controller.js';
 import * as photo from '../controllers/venuePhoto.controller.js';
 import * as venue from '../controllers/venue.controller.js';
@@ -323,6 +325,48 @@ const schemas: Record<string, Json> = {
         total_paise: { type: 'integer' },
         cancellation_policy: { type: 'array', items: { type: 'object' } },
     }),
+    PaymentOrder: obj({
+        key_id: { type: 'string', description: 'Razorpay key id for Checkout' },
+        order_id: { type: 'string', example: 'order_Nxxxxxxxx' },
+        amount_paise: { type: 'integer' },
+        currency: { type: 'string', example: 'INR' },
+        booking_id: { type: 'string', format: 'uuid' },
+        reference: { type: 'string' },
+        expires_at: { type: 'string', format: 'date-time' },
+        checkout_timeout_seconds: { type: 'integer', description: 'Pass as Checkout `timeout`' },
+        description: { type: 'string' },
+        prefill: obj({ name: { type: ['string', 'null'] }, email: { type: ['string', 'null'] }, contact: { type: ['string', 'null'] } }),
+    }),
+    LedgerEntry: obj({
+        id: { type: 'string', format: 'uuid' },
+        entry_type: { type: 'string', enum: ['booking', 'payout', 'payout_reversal', 'adjustment'] },
+        amount_paise: { type: 'integer', description: '+ credit to the venue, - debit' },
+        description: { type: 'string' },
+        booking_id: { type: ['string', 'null'] },
+        payout_id: { type: ['string', 'null'] },
+        created_at: { type: 'string', format: 'date-time' },
+    }),
+    Payout: obj({
+        id: { type: 'string', format: 'uuid' },
+        venue_id: { type: 'string', format: 'uuid' },
+        amount_paise: { type: 'integer' },
+        mode: { type: 'string', enum: ['manual', 'route'] },
+        status: { type: 'string', enum: ['processing', 'paid', 'failed'] },
+        razorpay_transfer_id: { type: ['string', 'null'] },
+        reference: { type: ['string', 'null'], description: 'UTR / transaction reference for manual payouts' },
+        failed_reason: { type: ['string', 'null'] },
+        created_at: { type: 'string', format: 'date-time' },
+        paid_at: { type: ['string', 'null'], format: 'date-time' },
+    }),
+    PayoutSettings: obj({
+        venue_id: { type: 'string', format: 'uuid' },
+        mode: { type: 'string', enum: ['manual', 'route'] },
+        razorpay_account_id: { type: ['string', 'null'], description: 'Route linked account (set by admin)' },
+        account_holder_name: { type: ['string', 'null'] },
+        bank_account_number: { type: ['string', 'null'], description: 'Masked (••••1234) except for admins' },
+        bank_ifsc: { type: ['string', 'null'] },
+        upi_id: { type: ['string', 'null'] },
+    }),
     StaffList: obj({
         members: { type: 'array', items: obj({ role: { type: 'string', enum: ['manager', 'staff'] }, created_at: { type: 'string' }, user: ref('Profile') }) },
         pending_invites: { type: 'array', items: obj({ email: { type: 'string' }, role: { type: 'string' }, created_at: { type: 'string' } }) },
@@ -372,6 +416,7 @@ export const openApiSpec: Json = {
         { name: 'Venues (public)' }, { name: 'Venues (manage)' }, { name: 'Courts' }, { name: 'Photos' },
         { name: 'Hours & pricing' }, { name: 'Blocks' }, { name: 'Availability' },
         { name: 'Bookings' }, { name: 'Front desk' },
+        { name: 'Payments' }, { name: 'Earnings' },
         { name: 'Staff' }, { name: 'Me' }, { name: 'Admin' },
     ],
     components: {
@@ -679,7 +724,7 @@ export const openApiSpec: Json = {
             post: op('Bookings', 'Book a court', {
                 description: [
                     '`date` is the availability date the slot is listed under; `start` must be a slot start; duration a multiple of the court slot length within its min/max.',
-                    '**online**: 10% off (platform-funded); status `pending_payment`, holds the slot until `expires_at` (10 min). Payment confirms it (Phase 4).',
+                    '**online**: 10% off (platform-funded); status `pending_payment`, holds the slot until `expires_at` (10 min). Then call `POST /me/bookings/{id}/pay` and open Razorpay Checkout.',
                     '**pay_at_venue**: confirmed immediately; only when the venue allows it, within its pay-at-venue window before the slot, and only one upcoming pay-at-venue booking per player.',
                     'Send an `Idempotency-Key` header (8-100 chars) so retries never double book; a repeat returns the same booking. Requires a completed profile. 20 attempts/min per user.',
                 ].join('\n\n'),
@@ -707,6 +752,102 @@ export const openApiSpec: Json = {
                 requestBody: { required: false, ...json(obj({ reason: { type: 'string' } })) },
                 responses: { 200: ok('Cancelled', obj({ booking: ref('Booking') })), 404: E[404], 409: E[409] },
             }),
+        },
+
+        // ---------------- Payments ----------------
+        '/me/bookings/{id}/pay': {
+            post: op('Payments', 'Start paying a pending online booking (Razorpay order)', {
+                description: 'Returns what Razorpay Checkout needs. Calling again reuses the same order. Fails once the 10-minute payment window has ended.',
+                security: auth, parameters: [pathParam('id', 'Booking id', 'uuid')],
+                responses: { 200: ok('Order', ref('PaymentOrder')), 404: E[404], 409: err('Not waiting for payment / window ended'), 503: err('Payments not configured') },
+            }),
+        },
+        '/me/bookings/{id}/pay/verify': {
+            post: op('Payments', 'Confirm payment after Checkout succeeds', {
+                description: 'Send the three values from the Checkout success handler. The signature is verified and the payment re-read from Razorpay. outcome: confirmed | already_processed | refund_queued (payment could not be used and is refunded automatically) | failed. The webhook confirms the booking too, so the app may also just poll the booking.',
+                security: auth, parameters: [pathParam('id', 'Booking id', 'uuid')], requestBody: body(fromZod(payment.verifySchema)),
+                responses: {
+                    200: ok('Result', obj({ outcome: { type: 'string' }, refund_reason: { type: 'string' }, booking: ref('PlayerBooking') })),
+                    400: err('Invalid signature'), 404: E[404], 503: err('Payments not configured'),
+                },
+            }),
+        },
+        '/payments/webhook': {
+            post: op('Payments', 'Razorpay webhook (called by Razorpay only)', {
+                description: 'Verified with X-Razorpay-Signature (HMAC-SHA256 of the raw body with the webhook secret) and de-duplicated by X-Razorpay-Event-Id. Handles payment.authorized/captured/failed, order.paid, refund.processed/failed, transfer.processed/failed.',
+                responses: { 200: ok('Processed'), 400: err('Invalid signature') },
+            }),
+        },
+
+        // ---------------- Earnings (owner) ----------------
+        '/venues/{venueId}/earnings': {
+            get: op('Earnings', 'Balance, ledger and recent payouts (owner)', {
+                description: 'Online bookings credit subtotal minus 10% commission when completed / no-show (partially for player cancellations that kept money). Completed pay-at-venue bookings debit the 10% commission. Walk-ins have no commission.',
+                security: auth, parameters: [venueId, ...pageParams],
+                responses: {
+                    200: ok('Earnings', obj({
+                        balance_paise: { type: 'integer' }, commission_percent: { type: 'integer' }, payout_mode: { type: 'string' },
+                        ledger: { type: 'array', items: ref('LedgerEntry') }, ledger_total: { type: 'integer' },
+                        recent_payouts: { type: 'array', items: ref('Payout') },
+                    })),
+                    403: E[403],
+                },
+            }),
+        },
+        '/venues/{venueId}/payout-settings': {
+            get: op('Earnings', 'Payout settings (owner; bank account masked)', { security: auth, parameters: [venueId], responses: { 200: ok('Settings', obj({ settings: ref('PayoutSettings') })), 403: E[403] } }),
+            put: op('Earnings', 'Update payout settings (owner)', {
+                description: 'manual: needs full bank details (holder, account number, IFSC) or a UPI id. route: automatic daily transfers, only after EasyPlay has set up the Razorpay linked account.',
+                security: auth, parameters: [venueId], requestBody: body(fromZod(payout.settingsSchema)),
+                responses: { 200: ok('Settings', obj({ settings: ref('PayoutSettings') })), 400: E[400], 403: E[403], 409: err('Route not set up yet') },
+            }),
+        },
+
+        // ---------------- Admin: money ----------------
+        '/admin/payouts/balances': {
+            get: op('Admin', 'Venues with a non-zero balance', { security: auth, responses: { 200: ok('Balances', obj({ venues: { type: 'array', items: obj({ venue_id: { type: 'string' }, venue_name: { type: 'string' }, venue_slug: { type: 'string' }, city: { type: ['string', 'null'] }, payout_mode: { type: 'string' }, balance_paise: { type: 'integer' } }) } })) } }),
+        },
+        '/admin/payouts': {
+            get: op('Admin', 'List payouts', {
+                security: auth, parameters: [query('status', { type: 'string', enum: ['processing', 'paid', 'failed'] }), query('venue_id', { type: 'string', format: 'uuid' }), ...pageParams],
+                responses: { 200: ok('Payouts', paged('Payout', 'payouts')) },
+            }),
+        },
+        '/admin/payouts/{payoutId}/resolve': {
+            post: op('Admin', 'Settle a payout stuck in processing', {
+                description: 'Use after checking the transfer in the Razorpay dashboard. failed puts the amount back on the venue balance.',
+                security: auth, parameters: [pathParam('payoutId', 'Payout id', 'uuid')], requestBody: body(fromZod(payout.resolveSchema)),
+                responses: { 200: ok('Payout', obj({ payout: ref('Payout') })), 400: E[400], 404: E[404], 409: err('Not processing') },
+            }),
+        },
+        '/admin/venues/{venueId}/payout-settings': {
+            get: op('Admin', 'Full payout settings and balance of a venue', { security: auth, parameters: [venueId], responses: { 200: ok('Settings', obj({ settings: ref('PayoutSettings'), balance_paise: { type: 'integer' } })) } }),
+            put: op('Admin', 'Set the Razorpay Route linked account', {
+                description: 'null removes it (and switches a route venue back to manual).',
+                security: auth, parameters: [venueId], requestBody: body(fromZod(payout.linkedAccountSchema)),
+                responses: { 200: ok('Settings', obj({ settings: ref('PayoutSettings') })), 400: E[400] },
+            }),
+        },
+        '/admin/venues/{venueId}/payouts': {
+            post: op('Admin', 'Record a manual payout (after sending the bank/UPI transfer)', {
+                security: auth, parameters: [venueId], requestBody: body(fromZod(payout.manualPayoutSchema)),
+                responses: { 201: ok('Recorded', obj({ payout: ref('Payout'), balance_paise: { type: 'integer' } })), 400: E[400], 409: err('More than the balance') },
+            }),
+        },
+        '/admin/venues/{venueId}/adjustments': {
+            post: op('Admin', 'Ledger adjustment (+ credit / - debit, e.g. commission paid by the venue in cash)', {
+                security: auth, parameters: [venueId], requestBody: body(fromZod(payout.adjustmentSchema)),
+                responses: { 201: ok('Added', obj({ entry: ref('LedgerEntry'), balance_paise: { type: 'integer' } })), 400: E[400] },
+            }),
+        },
+        '/admin/refunds': {
+            get: op('Admin', 'List refunds', {
+                security: auth, parameters: [query('status', { type: 'string', enum: ['pending', 'processing', 'processed', 'failed'] }), ...pageParams],
+                responses: { 200: ok('Refunds') },
+            }),
+        },
+        '/admin/refunds/{refundId}/retry': {
+            post: op('Admin', 'Retry a failed refund', { security: auth, parameters: [pathParam('refundId', 'Refund id', 'uuid')], responses: { 204: { description: 'Queued' }, 409: err('Not failed') } }),
         },
 
         // ---------------- Front desk (venue staff) ----------------

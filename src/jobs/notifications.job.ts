@@ -2,6 +2,7 @@ import { env } from '../config/env.js';
 import { EmailError, emailEnabled, sendEmail } from '../lib/email.js';
 import { pushEnabled, sendPush } from '../lib/push.js';
 import { processBookingJobs } from '../models/booking.model.js';
+import { runPaymentsTick } from './payments.job.js';
 import {
     claimDeliveries,
     completeDelivery,
@@ -55,6 +56,8 @@ export const runNotificationsTick = async (): Promise<void> => {
         // Expire unpaid holds, complete finished bookings, queue 2-hour game reminders
         for (let r = await processBookingJobs(BATCH); r.expired === BATCH || r.completed === BATCH || r.reminded === BATCH; r = await processBookingJobs(BATCH)) { /* keep draining */ }
         while ((await processDueReminders(BATCH)) === BATCH) { /* keep draining */ }
+        // Refunds, lost-webhook reconciliation, automatic Route payouts
+        await runPaymentsTick().catch((e) => console.error('Payments job failed', e));
         for (let batch = await claimDeliveries(BATCH, LEASE_SECONDS); batch.length; batch = await claimDeliveries(BATCH, LEASE_SECONDS)) {
             await Promise.all(batch.map(deliver));
             if (batch.length < BATCH) break;
