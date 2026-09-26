@@ -7,10 +7,11 @@ export interface Venue {
     id: string;
     owner_id: string;
     name: string;
+    status: 'draft' | 'pending_review' | 'live' | 'rejected' | 'suspended';
 }
 
 export const findVenueById = async (id: string): Promise<Venue | null> => {
-    const { data, error } = await supabaseAdmin.from('venues').select('id, owner_id, name').eq('id', id).maybeSingle();
+    const { data, error } = await supabaseAdmin.from('venues').select('id, owner_id, name, status').eq('id', id).is('deleted_at', null).maybeSingle();
     if (error) throw error;
     return data as Venue | null;
 };

@@ -45,8 +45,14 @@ export const requireVenueAccess = (...staffRoles: VenueStaffRole[]) =>
         const venue = await findVenueById(venueId);
         if (!venue) { res.status(404).json({ error: 'Venue not found' }); return; }
 
-        if (user.role === 'admin' || venue.owner_id === user.id) {
-            req.venueAccess = { venue, role: user.role === 'admin' ? 'admin' : 'owner' };
+        if (user.role === 'admin') {
+            req.venueAccess = { venue, role: 'admin' };
+            next();
+            return;
+        }
+        // An owner who has been demoted loses management access to their venues
+        if (venue.owner_id === user.id && user.role === 'venue_owner') {
+            req.venueAccess = { venue, role: 'owner' };
             next();
             return;
         }
