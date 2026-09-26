@@ -1,9 +1,34 @@
-import { createClient } from '@supabase/supabase-js';
-import dotenv from 'dotenv';
+import { createClient, type SupportedStorage } from '@supabase/supabase-js';
+import { env } from '../config/env.js';
 
-dotenv.config();
+export const AUTH_STORAGE_KEY = 'easyplay-auth';
 
-const supabaseUrl = process.env.SUPABASE_URL as string;
-const supabaseKey = process.env.SUPABASE_ANON_KEY as string;
+// Service-role client for trusted server-side work (profiles, admin auth calls).
+// Never expose this key to clients.
+export const supabaseAdmin = createClient(env.supabaseUrl, env.supabaseServiceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+});
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+// A fresh anon client per auth operation, so one user's session never leaks
+// into another request through a shared in-memory client.
+export const createAuthClient = (storage?: Record<string, string>) => {
+    const store = storage ?? {};
+    const memoryStorage: SupportedStorage = {
+        getItem: (key) => store[key] ?? null,
+        setItem: (key, value) => { store[key] = value; },
+        removeItem: (key) => { delete store[key]; },
+    };
+
+    const client = createClient(env.supabaseUrl, env.supabaseAnonKey, {
+        auth: {
+            flowType: 'pkce',
+            storageKey: AUTH_STORAGE_KEY,
+            storage: memoryStorage,
+            persistSession: true, // stored only in the per-request memory store above
+            autoRefreshToken: false,
+            detectSessionInUrl: false,
+        },
+    });
+
+    return { client, store };
+};
