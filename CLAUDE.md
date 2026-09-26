@@ -41,13 +41,24 @@ Venue owners list venues; venue staff manage day-to-day bookings; admins approve
 - Errors: `P0001` → 409 with the SQL message, `P0002` → 404.
 - Validation: zod via `parse()` in `src/utils/validate.ts`; use `z.strictObject` for bodies.
 
+- Phase 2 (`003_availability.sql`): venue `booking_window_days` (1-7) / `listing_window_days` (<=30) /
+  `min_notice_minutes`; `opening_hours` (venue-wide or per court, minutes from local midnight, may cross midnight);
+  `price_rules` (weekly or date, per hour in **paise**; date > weekly > court base price); `court_blocks`
+  (court_id null = venue closed); `get_availability()` computes slots in SQL (never stored); `slot_reminders` →
+  `process_due_reminders()` → `notifications` + `notification_deliveries` outbox (email via Resend, push via FCM),
+  sent by `src/jobs/notifications.job.ts` (lease-based claiming, retries with backoff, safe on many instances).
+- Permissions: owner = everything; manager = venue details, courts, photos, hours, pricing, blocks;
+  staff = blocks + read. Owner only: delete venue, submit/unpublish, staff management.
+
 ## Phase 3 must add
 - Block deleting a venue/court, deactivating a court, or changing a court's sport/durations while it has future
   confirmed bookings.
+- `get_availability()` must return `booked` for booked slots; blocks overlapping confirmed bookings must be
+  rejected (or handled explicitly); reminders must be cancelled if the slot gets booked before they fire.
 
 ## Roadmap
 1. Venues & courts (browse, owner CRUD, photos, admin review) ← done
-2. Availability & pricing (hours, price rules, blocks, computed slots)
+2. Availability & pricing (hours, price rules, blocks, computed slots, reminders, notifications) ← done
 3. Bookings (exclusion constraint against double booking, holds, staff check-in, cancellation policy)
 4. Payments (Razorpay, webhooks, refunds, payouts)
 5. Reviews, favourites, notifications, owner dashboard

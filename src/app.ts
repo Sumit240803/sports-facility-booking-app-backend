@@ -3,6 +3,7 @@ import multer from "multer";
 import swaggerUi from "swagger-ui-express";
 import { env } from "./config/env.js";
 import { openApiSpec } from "./docs/openapi.js";
+import { startNotificationsJob } from "./jobs/notifications.job.js";
 import router from "./routes/index.js";
 import { HttpError } from "./utils/http.js";
 
@@ -37,6 +38,8 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (e?.type === "entity.too.large") { res.status(413).json({ error: "Request body too large" }); return; }
     // Postgres unique violation, e.g. a phone number already used by another account
     if (e?.code === "23505") { res.status(409).json({ error: "Already in use" }); return; }
+    // Postgres check constraint (last line of defence behind request validation)
+    if (e?.code === "23514") { res.status(400).json({ error: "Invalid value" }); return; }
     // Business rule violations raised by our SQL functions/triggers (messages are user-facing)
     if (e?.code === "P0001") { res.status(409).json({ error: e.message }); return; }
     if (e?.code === "P0002") { res.status(404).json({ error: e.message }); return; }
@@ -45,6 +48,16 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     res.status(500).json({ error: "Internal server error" });
 });
 
-app.listen(env.port, () => {
+const server = app.listen(env.port, () => {
     console.log(`server running at port ${env.port}`);
 });
+const stopJobs = startNotificationsJob();
+
+// Graceful shutdown: stop jobs, finish in-flight requests
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => {
+        stopJobs();
+        server.close(() => process.exit(0));
+        setTimeout(() => process.exit(0), 10_000).unref();
+    });
+}

@@ -115,7 +115,7 @@ export const getMe = async (req: Request, res: Response): Promise<void> => {
 };
 
 // PATCH /auth/me  (auth required)
-// { full_name?, avatar_url?, city?, phone?, preferred_sports? }
+// { full_name?, avatar_url?, city?, phone?, preferred_sports?, notify_email?, notify_push? }
 // onboarded_at is set automatically once full_name, phone and city are all present.
 export const updateMe = async (req: Request, res: Response): Promise<void> => {
     const body = req.body ?? {};
@@ -151,6 +151,12 @@ export const updateMe = async (req: Request, res: Response): Promise<void> => {
             return;
         }
         changes.preferred_sports = unique;
+    }
+
+    for (const field of ['notify_email', 'notify_push'] as const) {
+        if (body[field] === undefined) continue;
+        if (typeof body[field] !== 'boolean') { res.status(400).json({ error: `${field} must be a boolean` }); return; }
+        changes[field] = body[field];
     }
 
     if (Object.keys(changes).length === 0) { res.status(400).json({ error: 'No valid fields to update' }); return; }

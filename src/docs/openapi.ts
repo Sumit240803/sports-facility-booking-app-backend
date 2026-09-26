@@ -3,6 +3,8 @@
 import { z } from 'zod';
 import * as catalog from '../controllers/catalog.controller.js';
 import * as court from '../controllers/court.controller.js';
+import * as me from '../controllers/me.controller.js';
+import * as schedule from '../controllers/schedule.controller.js';
 import * as photo from '../controllers/venuePhoto.controller.js';
 import * as venue from '../controllers/venue.controller.js';
 import { env } from '../config/env.js';
@@ -56,6 +58,8 @@ const schemas: Record<string, Json> = {
         status: { type: 'string', enum: ['active', 'suspended'] },
         onboarded_at: { type: ['string', 'null'], format: 'date-time' },
         last_login_at: { type: ['string', 'null'], format: 'date-time' },
+        notify_email: { type: 'boolean' },
+        notify_push: { type: 'boolean' },
         created_at: { type: 'string', format: 'date-time' },
         updated_at: { type: 'string', format: 'date-time' },
     }),
@@ -97,6 +101,8 @@ const schemas: Record<string, Json> = {
         base_slot_minutes: { type: 'integer', enum: [30, 60] },
         min_duration_minutes: { type: 'integer' },
         max_duration_minutes: { type: 'integer' },
+        price_per_hour_paise: { type: ['integer', 'null'], description: 'Base price per hour in paise (₹1 = 100)' },
+        uses_venue_hours: { type: 'boolean', description: 'false when the court has its own opening hours' },
         is_active: { type: 'boolean' },
         sort_order: { type: 'integer' },
     }),
@@ -118,6 +124,9 @@ const schemas: Record<string, Json> = {
         amenities: { type: 'array', items: { type: 'string' } },
         rules: { type: ['string', 'null'] },
         timezone: { type: 'string', example: 'Asia/Kolkata' },
+        booking_window_days: { type: 'integer', minimum: 1, maximum: 7, description: 'Bookings open this many days ahead (today counts as day 1)' },
+        listing_window_days: { type: 'integer', minimum: 1, maximum: 30, description: 'Slots are visible this many days ahead' },
+        min_notice_minutes: { type: 'integer', minimum: 0, maximum: 1440, description: 'No booking of slots starting sooner than this' },
         status: { type: 'string', enum: ['draft', 'pending_review', 'live', 'rejected', 'suspended'] },
         status_reason: { type: ['string', 'null'] },
         submitted_at: { type: ['string', 'null'], format: 'date-time' },
@@ -155,10 +164,86 @@ const schemas: Record<string, Json> = {
                 sports: { type: 'array', items: { type: 'string' } },
                 courts: { type: 'array', items: ref('Court') },
                 photos: { type: 'array', items: ref('Photo') },
+                hours: { type: 'array', items: ref('HoursRange') },
+                court_hours: { type: 'object', additionalProperties: { type: 'array', items: ref('HoursRange') } },
             }),
         ],
         description: 'Public view: excludes owner_id, status and review fields',
     },
+    HoursRange: obj({
+        day: { type: 'integer', minimum: 0, maximum: 6, description: '0 = Sunday' },
+        open: { type: 'string', example: '06:00' },
+        close: { type: 'string', example: '02:00', description: 'close <= open means after midnight; open == close means 24 hours' },
+        closes_next_day: { type: 'boolean' },
+    }),
+    Hours: obj({
+        venue: { type: 'array', items: ref('HoursRange') },
+        courts: { type: 'object', additionalProperties: { type: 'array', items: ref('HoursRange') }, description: 'Own hours of courts with uses_venue_hours = false, by court id' },
+    }),
+    PriceRule: obj({
+        id: { type: 'string', format: 'uuid' },
+        days: { type: ['array', 'null'], items: { type: 'integer' } },
+        date: { type: ['string', 'null'], format: 'date' },
+        start: { type: 'string', example: '18:00' },
+        end: { type: 'string', example: '22:00' },
+        price_per_hour_paise: { type: 'integer' },
+    }),
+    Pricing: obj({ price_per_hour_paise: { type: ['integer', 'null'] }, rules: { type: 'array', items: ref('PriceRule') } }),
+    Block: obj({
+        id: { type: 'string', format: 'uuid' },
+        court_id: { type: ['string', 'null'], format: 'uuid', description: 'null = whole venue closed' },
+        starts_at: { type: 'string', format: 'date-time' },
+        ends_at: { type: 'string', format: 'date-time' },
+        reason: { type: ['string', 'null'] },
+        created_by: { type: ['string', 'null'], format: 'uuid' },
+        created_at: { type: 'string', format: 'date-time' },
+    }),
+    Slot: obj({
+        start: { type: 'string', format: 'date-time' },
+        end: { type: 'string', format: 'date-time' },
+        price_paise: { type: 'integer', description: 'Price of this one slot' },
+        status: { type: 'string', enum: ['available', 'not_yet_open', 'closed', 'blocked', 'past'], description: 'closed = inside minimum notice; not_yet_open = listed, booking opens at opens_at' },
+        opens_at: { type: 'string', format: 'date-time', description: 'Only for not_yet_open' },
+    }),
+    Availability: obj({
+        date: { type: 'string', format: 'date' },
+        timezone: { type: 'string' },
+        today: { type: 'string', format: 'date' },
+        booking_window_days: { type: 'integer' },
+        listing_window_days: { type: 'integer' },
+        bookable_until: { type: 'string', format: 'date' },
+        listed_until: { type: 'string', format: 'date' },
+        min_notice_minutes: { type: 'integer' },
+        courts: {
+            type: 'array',
+            items: obj({
+                id: { type: 'string', format: 'uuid' },
+                name: { type: 'string' },
+                sport_id: { type: 'string' },
+                is_indoor: { type: 'boolean' },
+                base_slot_minutes: { type: 'integer' },
+                min_duration_minutes: { type: 'integer' },
+                max_duration_minutes: { type: 'integer' },
+                slots: { type: 'array', items: ref('Slot') },
+            }),
+        },
+    }),
+    Reminder: obj({
+        id: { type: 'string', format: 'uuid' },
+        slot_start: { type: 'string', format: 'date-time' },
+        slot_date: { type: 'string', format: 'date' },
+        notify_at: { type: 'string', format: 'date-time' },
+        status: { type: 'string', enum: ['pending', 'sent', 'cancelled'] },
+    }),
+    Notification: obj({
+        id: { type: 'string', format: 'uuid' },
+        type: { type: 'string', example: 'booking_open' },
+        title: { type: 'string' },
+        body: { type: 'string' },
+        data: { type: 'object' },
+        read_at: { type: ['string', 'null'], format: 'date-time' },
+        created_at: { type: 'string', format: 'date-time' },
+    }),
     StaffList: obj({
         members: { type: 'array', items: obj({ role: { type: 'string', enum: ['manager', 'staff'] }, created_at: { type: 'string' }, user: ref('Profile') }) },
         pending_invites: { type: 'array', items: obj({ email: { type: 'string' }, role: { type: 'string' }, created_at: { type: 'string' } }) },
@@ -206,7 +291,8 @@ export const openApiSpec: Json = {
     tags: [
         { name: 'Auth' }, { name: 'Profile' }, { name: 'Owner applications' }, { name: 'Catalog' },
         { name: 'Venues (public)' }, { name: 'Venues (manage)' }, { name: 'Courts' }, { name: 'Photos' },
-        { name: 'Staff' }, { name: 'Admin' },
+        { name: 'Hours & pricing' }, { name: 'Blocks' }, { name: 'Availability' },
+        { name: 'Staff' }, { name: 'Me' }, { name: 'Admin' },
     ],
     components: {
         securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' } },
@@ -252,6 +338,8 @@ export const openApiSpec: Json = {
                     city: { type: ['string', 'null'] },
                     phone: { type: 'string', example: '+919876543210' },
                     preferred_sports: { type: 'array', items: { type: 'string' }, maxItems: 10 },
+                    notify_email: { type: 'boolean' },
+                    notify_push: { type: 'boolean' },
                 })),
                 responses: { 200: ok('Updated', obj({ user: ref('Profile') })), 400: E[400], 401: E[401], 409: err('Phone already used by another account') },
             }),
@@ -334,12 +422,12 @@ export const openApiSpec: Json = {
             }),
         },
         '/venues/{venueId}': {
-            patch: op('Venues (manage)', 'Update venue (owner/admin)', {
-                description: 'Empty string or null clears optional fields. A listed venue cannot lose address, city, location or phone (409).',
+            patch: op('Venues (manage)', 'Update venue incl. booking settings (owner, manager)', {
+                description: 'Empty string or null clears optional fields. A listed venue cannot lose address, city, location or phone (409). listing_window_days must be >= booking_window_days. Changing booking_window_days reschedules pending reminders.',
                 security: auth, parameters: [venueId], requestBody: body(fromZod(venue.updateSchema)),
                 responses: { 200: venueRes, 400: E[400], 403: E[403], 404: E[404], 409: E[409] },
             }),
-            delete: op('Venues (manage)', 'Delete venue (soft, owner/admin)', { security: auth, parameters: [venueId], responses: { 204: { description: 'Deleted' }, 403: E[403], 404: E[404] } }),
+            delete: op('Venues (manage)', 'Delete venue (soft, owner only)', { security: auth, parameters: [venueId], responses: { 204: { description: 'Deleted' }, 403: E[403], 404: E[404] } }),
         },
         '/venues/{venueId}/manage': {
             get: op('Venues (manage)', 'Full venue incl. drafts, inactive courts (owner, admin, staff)', {
@@ -349,7 +437,7 @@ export const openApiSpec: Json = {
         },
         '/venues/{venueId}/submit': {
             post: op('Venues (manage)', 'Submit for admin review', {
-                description: 'draft/rejected → pending_review. Requires address, city, location, phone, ≥1 photo and ≥1 active court.',
+                description: 'draft/rejected → pending_review. Requires address, city, location, phone, ≥1 photo, ≥1 active court, a price on every active court and venue opening hours.',
                 security: auth, parameters: [venueId], responses: { 200: venueRes, 403: E[403], 404: E[404], 409: E[409] },
             }),
         },
@@ -363,18 +451,18 @@ export const openApiSpec: Json = {
         // ---------------- Courts ----------------
         '/venues/{venueId}/courts': {
             get: op('Courts', 'List courts incl. inactive (owner, admin, staff)', { security: auth, parameters: [venueId], responses: { 200: ok('Courts', obj({ courts: { type: 'array', items: ref('Court') } })), 403: E[403] } }),
-            post: op('Courts', 'Create court (owner/admin)', {
-                description: 'Durations must be multiples of base_slot_minutes (30 or 60); defaults 60/60/120. Max 50 courts per venue.',
+            post: op('Courts', 'Create court (owner, manager)', {
+                description: 'Durations must be multiples of base_slot_minutes (30 or 60); defaults 60/60/120. Max 50 courts per venue. On a listed venue an active court needs price_per_hour_paise.',
                 security: auth, parameters: [venueId], requestBody: body(fromZod(court.createSchema)),
                 responses: { 201: ok('Created', obj({ court: ref('Court') })), 400: E[400], 403: E[403], 409: err('Name taken or court limit reached') },
             }),
         },
         '/venues/{venueId}/courts/{courtId}': {
-            patch: op('Courts', 'Update court (owner/admin)', {
+            patch: op('Courts', 'Update court (owner, manager)', {
                 security: auth, parameters: [venueId, pathParam('courtId', 'Court id', 'uuid')], requestBody: body(fromZod(court.updateSchema)),
                 responses: { 200: ok('Updated', obj({ court: ref('Court') })), 400: E[400], 404: E[404], 409: err('Name taken, or last active court of a listed venue') },
             }),
-            delete: op('Courts', 'Delete court (soft, owner/admin)', {
+            delete: op('Courts', 'Delete court (soft, owner, manager)', {
                 security: auth, parameters: [venueId, pathParam('courtId', 'Court id', 'uuid')],
                 responses: { 204: { description: 'Deleted' }, 404: E[404], 409: err('Last active court of a listed venue') },
             }),
@@ -383,7 +471,7 @@ export const openApiSpec: Json = {
         // ---------------- Photos ----------------
         '/venues/{venueId}/photos': {
             get: op('Photos', 'List photos (owner, admin, staff)', { security: auth, parameters: [venueId], responses: { 200: photosRes } }),
-            post: op('Photos', 'Upload photo (owner/admin)', {
+            post: op('Photos', 'Upload photo (owner, manager)', {
                 description: 'JPEG/PNG/WebP (HEIF when decodable), up to 15 MB, min 400px short side. Stored as 1600px + 480px WebP with metadata stripped. Max 15 per venue; first photo becomes the cover.',
                 security: auth, parameters: [venueId],
                 requestBody: { required: true, content: { 'multipart/form-data': { schema: obj({ photo: { type: 'string', format: 'binary' } }, ['photo']) } } },
@@ -391,19 +479,113 @@ export const openApiSpec: Json = {
             }),
         },
         '/venues/{venueId}/photos/order': {
-            put: op('Photos', 'Reorder photos (owner/admin)', {
+            put: op('Photos', 'Reorder photos (owner, manager)', {
                 security: auth, parameters: [venueId], requestBody: body(fromZod(photo.orderSchema)),
                 responses: { 200: photosRes, 400: E[400], 409: err('photo_ids must list every photo exactly once') },
             }),
         },
         '/venues/{venueId}/photos/{photoId}/cover': {
-            put: op('Photos', 'Set cover photo (owner/admin)', { security: auth, parameters: [venueId, pathParam('photoId', 'Photo id', 'uuid')], responses: { 200: photosRes, 404: E[404] } }),
+            put: op('Photos', 'Set cover photo (owner, manager)', { security: auth, parameters: [venueId, pathParam('photoId', 'Photo id', 'uuid')], responses: { 200: photosRes, 404: E[404] } }),
         },
         '/venues/{venueId}/photos/{photoId}': {
-            delete: op('Photos', 'Delete photo (owner/admin)', {
+            delete: op('Photos', 'Delete photo (owner, manager)', {
                 security: auth, parameters: [venueId, pathParam('photoId', 'Photo id', 'uuid')],
                 responses: { 204: { description: 'Deleted; next photo becomes cover if needed' }, 404: E[404], 409: err('Last photo of a listed venue') },
             }),
+        },
+
+        // ---------------- Hours & pricing ----------------
+        '/venues/{venueId}/hours': {
+            get: op('Hours & pricing', 'Venue and court opening hours (any staff)', { security: auth, parameters: [venueId], responses: { 200: ok('Hours', ref('Hours')), 403: E[403] } }),
+            put: op('Hours & pricing', 'Replace venue opening hours (owner, manager)', {
+                description: 'Times in 30-minute steps. Several ranges per day allowed; overlaps (including across midnight and Sat→Sun) are rejected. A listed venue cannot clear its hours.',
+                security: auth, parameters: [venueId], requestBody: body(fromZod(schedule.hoursSchema)),
+                responses: { 200: ok('Hours', ref('Hours')), 400: E[400], 403: E[403], 409: E[409] },
+            }),
+        },
+        '/venues/{venueId}/courts/{courtId}/hours': {
+            put: op('Hours & pricing', 'Give a court its own opening hours (owner, manager)', {
+                security: auth, parameters: [venueId, pathParam('courtId', 'Court id', 'uuid')], requestBody: body(fromZod(schedule.hoursSchema)),
+                responses: { 200: ok('Hours', ref('Hours')), 400: E[400], 404: E[404], 409: E[409] },
+            }),
+            delete: op('Hours & pricing', 'Court follows venue hours again (owner, manager)', {
+                security: auth, parameters: [venueId, pathParam('courtId', 'Court id', 'uuid')], responses: { 200: ok('Hours', ref('Hours')), 404: E[404] },
+            }),
+        },
+        '/venues/{venueId}/courts/{courtId}/pricing': {
+            get: op('Hours & pricing', 'Court base price and price rules (any staff)', {
+                security: auth, parameters: [venueId, pathParam('courtId', 'Court id', 'uuid')], responses: { 200: ok('Pricing', ref('Pricing')), 404: E[404] },
+            }),
+            put: op('Hours & pricing', 'Replace court price rules (owner, manager)', {
+                description: 'Each rule has either `days` (weekly, 0 = Sunday) or `date` (one day). Date rules beat weekly rules; unmatched times use the court base price (set via PATCH court). Rules cannot cross midnight (use 24:00 as end). Overlaps are rejected. Prices are per hour in paise.',
+                security: auth, parameters: [venueId, pathParam('courtId', 'Court id', 'uuid')], requestBody: body(fromZod(schedule.pricingSchema)),
+                responses: { 200: ok('Pricing', ref('Pricing')), 400: E[400], 404: E[404], 409: err('Rules overlap') },
+            }),
+        },
+
+        // ---------------- Blocks ----------------
+        '/venues/{venueId}/blocks': {
+            get: op('Blocks', 'List blocks/closures (any staff)', {
+                security: auth,
+                parameters: [venueId, query('from', { type: 'string', format: 'date-time' }, 'Default now'), query('to', { type: 'string', format: 'date-time' }, 'Default from + 60 days')],
+                responses: { 200: ok('Blocks', obj({ blocks: { type: 'array', items: ref('Block') } })), 400: E[400] },
+            }),
+            post: op('Blocks', 'Block a court or close the whole venue (any staff)', {
+                description: 'Omit court_id to close the whole venue (e.g. a holiday). Max 62 days; must end in the future.',
+                security: auth, parameters: [venueId], requestBody: body(fromZod(schedule.blockSchema)),
+                responses: { 201: ok('Created', obj({ block: ref('Block') })), 400: E[400], 404: err('Court not found') },
+            }),
+        },
+        '/venues/{venueId}/blocks/{blockId}': {
+            delete: op('Blocks', 'Remove block (any staff)', { security: auth, parameters: [venueId, pathParam('blockId', 'Block id', 'uuid')], responses: { 204: { description: 'Removed' }, 404: E[404] } }),
+        },
+
+        // ---------------- Availability ----------------
+        '/venues/{idOrSlug}/availability': {
+            get: op('Availability', 'Slots for a live venue on one date', {
+                description: 'Date must be within the listing window (default today). Slots beyond the booking window have status not_yet_open with opens_at, and can be saved as reminders.',
+                parameters: [pathParam('idOrSlug', 'Venue id or slug'), query('date', { type: 'string', format: 'date' }), query('court_id', { type: 'string', format: 'uuid' })],
+                responses: { 200: ok('Availability', ref('Availability')), 400: E[400], 404: E[404] },
+            }),
+        },
+        '/venues/{venueId}/manage/availability': {
+            get: op('Availability', 'Slots for any venue status, ±60 days (any staff)', {
+                security: auth,
+                parameters: [venueId, query('date', { type: 'string', format: 'date' }), query('court_id', { type: 'string', format: 'uuid' })],
+                responses: { 200: ok('Availability', ref('Availability')), 400: E[400], 403: E[403] },
+            }),
+        },
+
+        // ---------------- Me: reminders, notifications, devices ----------------
+        '/me/reminders': {
+            get: op('Me', 'My slot reminders', {
+                security: auth, parameters: [query('status', { type: 'string', enum: ['pending', 'sent', 'cancelled'] })],
+                responses: { 200: ok('Reminders', obj({ reminders: { type: 'array', items: ref('Reminder') } })) },
+            }),
+            post: op('Me', 'Remind me when booking opens for a slot', {
+                description: 'Only for slots with status not_yet_open. `date` is the availability date the slot was listed under. Max 50 active reminders. You get an in-app notification (plus email/push if enabled) when booking opens.',
+                security: auth, requestBody: body(fromZod(me.reminderSchema)),
+                responses: { 201: ok('Created', obj({ reminder: ref('Reminder') })), 400: E[400], 404: err('Court or slot not found'), 409: err('Slot already bookable, duplicate, or limit reached') },
+            }),
+        },
+        '/me/reminders/{id}': {
+            delete: op('Me', 'Cancel a pending reminder', { security: auth, parameters: [pathParam('id', 'Reminder id', 'uuid')], responses: { 204: { description: 'Cancelled' }, 404: E[404] } }),
+        },
+        '/me/notifications': {
+            get: op('Me', 'My notifications (newest first)', {
+                security: auth, parameters: [query('unread', { type: 'string', enum: ['true', 'false'] }), ...pageParams],
+                responses: { 200: ok('Notifications', obj({ notifications: { type: 'array', items: ref('Notification') }, total: { type: 'integer' }, unread_count: { type: 'integer' }, page: { type: 'integer' }, limit: { type: 'integer' } })) },
+            }),
+        },
+        '/me/notifications/{id}/read': {
+            post: op('Me', 'Mark notification read', { security: auth, parameters: [pathParam('id', 'Notification id', 'uuid')], responses: { 204: { description: 'Marked read' }, 404: E[404] } }),
+        },
+        '/me/notifications/read-all': {
+            post: op('Me', 'Mark all notifications read', { security: auth, responses: { 200: ok('Count', obj({ updated: { type: 'integer' } })) } }),
+        },
+        '/me/push-tokens': {
+            post: op('Me', 'Register this device for push (call on app start / token refresh)', { security: auth, requestBody: body(fromZod(me.pushTokenSchema)), responses: { 204: { description: 'Registered' }, 400: E[400] } }),
+            delete: op('Me', 'Unregister this device (call on logout)', { security: auth, requestBody: body(fromZod(me.removePushTokenSchema)), responses: { 204: { description: 'Removed' }, 400: E[400] } }),
         },
 
         // ---------------- Staff ----------------

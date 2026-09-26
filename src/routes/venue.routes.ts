@@ -1,5 +1,6 @@
 import express from 'express';
 import * as courtController from '../controllers/court.controller.js';
+import * as scheduleController from '../controllers/schedule.controller.js';
 import * as photoController from '../controllers/venuePhoto.controller.js';
 import * as venueController from '../controllers/venue.controller.js';
 import { requireAuth, requireRole, requireVenueAccess } from '../middlewares/auth.middleware.js';
@@ -7,8 +8,9 @@ import venueStaffRoutes from './venueStaff.routes.js';
 
 const router = express.Router();
 
-// Access levels for /:venueId routes (admins always pass)
+// Access levels for /:venueId routes (the owner and admins always pass)
 const ownerOnly = [requireAuth, requireVenueAccess()];
+const managers = [requireAuth, requireVenueAccess('manager')];
 const anyStaff = [requireAuth, requireVenueAccess('manager', 'staff')];
 
 // Public browse
@@ -20,28 +22,43 @@ router.get('/mine', requireAuth, venueController.mine);
 router.post('/', requireAuth, requireRole('venue_owner', 'admin'), venueController.create);
 
 router.get('/:venueId/manage', ...anyStaff, venueController.getManaged);
-router.patch('/:venueId', ...ownerOnly, venueController.update);
+router.get('/:venueId/manage/availability', ...anyStaff, scheduleController.manageAvailability);
+router.patch('/:venueId', ...managers, venueController.update);
 router.delete('/:venueId', ...ownerOnly, venueController.remove);
 router.post('/:venueId/submit', ...ownerOnly, venueController.ownerAction('submit'));
 router.post('/:venueId/unpublish', ...ownerOnly, venueController.ownerAction('unpublish'));
 
+// Opening hours
+router.get('/:venueId/hours', ...anyStaff, scheduleController.getHours);
+router.put('/:venueId/hours', ...managers, scheduleController.putVenueHours);
+
 // Courts
 router.get('/:venueId/courts', ...anyStaff, courtController.list);
-router.post('/:venueId/courts', ...ownerOnly, courtController.create);
-router.patch('/:venueId/courts/:courtId', ...ownerOnly, courtController.update);
-router.delete('/:venueId/courts/:courtId', ...ownerOnly, courtController.remove);
+router.post('/:venueId/courts', ...managers, courtController.create);
+router.patch('/:venueId/courts/:courtId', ...managers, courtController.update);
+router.delete('/:venueId/courts/:courtId', ...managers, courtController.remove);
+router.put('/:venueId/courts/:courtId/hours', ...managers, scheduleController.putCourtHours);
+router.delete('/:venueId/courts/:courtId/hours', ...managers, scheduleController.deleteCourtHours);
+router.get('/:venueId/courts/:courtId/pricing', ...anyStaff, scheduleController.getPricing);
+router.put('/:venueId/courts/:courtId/pricing', ...managers, scheduleController.putPricing);
+
+// Blocks / closures (all staff handle day-to-day operations)
+router.get('/:venueId/blocks', ...anyStaff, scheduleController.getBlocks);
+router.post('/:venueId/blocks', ...anyStaff, scheduleController.postBlock);
+router.delete('/:venueId/blocks/:blockId', ...anyStaff, scheduleController.removeBlock);
 
 // Photos
 router.get('/:venueId/photos', ...anyStaff, photoController.list);
-router.post('/:venueId/photos', ...ownerOnly, photoController.receivePhoto, photoController.create);
-router.put('/:venueId/photos/order', ...ownerOnly, photoController.reorder);
-router.put('/:venueId/photos/:photoId/cover', ...ownerOnly, photoController.makeCover);
-router.delete('/:venueId/photos/:photoId', ...ownerOnly, photoController.remove);
+router.post('/:venueId/photos', ...managers, photoController.receivePhoto, photoController.create);
+router.put('/:venueId/photos/order', ...managers, photoController.reorder);
+router.put('/:venueId/photos/:photoId/cover', ...managers, photoController.makeCover);
+router.delete('/:venueId/photos/:photoId', ...managers, photoController.remove);
 
-// Staff
+// Staff (owner only)
 router.use('/:venueId/staff', venueStaffRoutes);
 
-// Public venue page by id or slug (keep last so it doesn't shadow the routes above)
+// Public venue page and availability by id or slug (keep last so they don't shadow the routes above)
+router.get('/:idOrSlug/availability', scheduleController.publicAvailability);
 router.get('/:idOrSlug', venueController.getPublic);
 
 export default router;

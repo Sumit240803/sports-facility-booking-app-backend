@@ -3,6 +3,7 @@ import authRoutes from './auth.routes.js';
 import adminRoutes from './admin.routes.js';
 import { amenitiesRoutes, sportsRoutes } from './catalog.routes.js';
 import venueRoutes from './venue.routes.js';
+import meRoutes from './me.routes.js';
 import venueOwnerRoutes from './venueOwner.routes.js';
 
 const router = express.Router();
@@ -13,5 +14,6 @@ router.use('/admin', adminRoutes);
 router.use('/sports', sportsRoutes);
 router.use('/amenities', amenitiesRoutes);
 router.use('/venues', venueRoutes);
+router.use('/me', meRoutes);
 
 export default router;

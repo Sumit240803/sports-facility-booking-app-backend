@@ -25,4 +25,14 @@ export const env = {
         // Public base URL of the bucket (custom domain or https://pub-xxx.r2.dev), no trailing slash
         publicUrl: required('R2_PUBLIC_URL').replace(/\/+$/, ''),
     },
+    // Optional channels: when unset, those deliveries are marked skipped (in-app still works)
+    email: {
+        resendApiKey: process.env.RESEND_API_KEY || null,
+        from: process.env.EMAIL_FROM || null, // e.g. "EasyPlay <noreply@easyplay.in>"
+    },
+    push: {
+        firebaseServiceAccount: process.env.FIREBASE_SERVICE_ACCOUNT || null, // base64 of the service account JSON
+    },
+    // Background jobs (reminders, notification delivery). Safe to run on several instances.
+    jobsEnabled: process.env.JOBS_ENABLED !== 'false',
 };

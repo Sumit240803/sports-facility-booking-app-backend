@@ -39,3 +39,29 @@ export const pagination = {
 
 // Escapes LIKE/ILIKE wildcards in user search input
 export const escapeLike = (s: string): string => s.replace(/[\\%_]/g, (c) => `\\${c}`);
+
+// "HH:MM" (00:00-24:00, 30-minute steps) -> minutes from midnight
+export const timeOfDay = z
+    .string()
+    .regex(/^([01]\d|2[0-4]):(00|30)$/, 'must be HH:MM in 30-minute steps, e.g. 06:00 or 18:30')
+    .transform((t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3)))
+    .refine((m) => m <= 1440, 'must not be after 24:00');
+
+export const minutesToTime = (m: number): string =>
+    `${String(Math.floor((m % 1440) / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+
+// Calendar date "YYYY-MM-DD" that actually exists
+export const isoDate = z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'must be YYYY-MM-DD')
+    .refine((d) => !Number.isNaN(Date.parse(`${d}T00:00:00Z`)) && new Date(`${d}T00:00:00Z`).toISOString().startsWith(d), 'must be a real date');
+
+// Today's date (YYYY-MM-DD) in a time zone, and date arithmetic on such strings
+export const todayIn = (timeZone: string): string =>
+    new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+
+export const addDays = (date: string, days: number): string => {
+    const d = new Date(`${date}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+};

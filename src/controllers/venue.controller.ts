@@ -17,12 +17,22 @@ import {
     VENUE_STATUSES,
     type VenueInput,
 } from '../models/venue.model.js';
+import { findVenueSchedule } from '../models/schedule.model.js';
 import { HttpError } from '../utils/http.js';
 import { cleanText, escapeLike, longText, pagination, parse, phoneSchema, slugId } from '../utils/validate.js';
 import { UUID_RE } from '../utils/validation.js';
 
 const MAX_VENUES_PER_OWNER = 50;
-const TIMEZONES = new Set([...Intl.supportedValuesOf('timeZone'), 'UTC']);
+// Accepts canonical names and aliases (e.g. Asia/Kolkata, which some ICU builds list only as Asia/Calcutta)
+const isValidTimeZone = (tz: string): boolean => {
+    if (!/^[A-Za-z_]+(\/[A-Za-z0-9_+-]+)*$/.test(tz)) return false;
+    try {
+        new Intl.DateTimeFormat('en-US', { timeZone: tz });
+        return true;
+    } catch {
+        return false;
+    }
+};
 
 // Optional text field: empty string clears it (null)
 const optionalText = (schema: z.ZodType<string>) =>
@@ -41,14 +51,22 @@ const venueFields = {
     lng: z.number().min(-180).max(180).nullable().optional(),
     amenities: z.array(slugId).max(30).transform((a) => [...new Set(a)]).optional(),
     rules: optionalText(longText(2000)),
-    timezone: z.string().refine((tz) => TIMEZONES.has(tz), 'must be a valid IANA time zone, e.g. Asia/Kolkata').optional(),
+    timezone: z.string().max(64).refine(isValidTimeZone, 'must be a valid IANA time zone, e.g. Asia/Kolkata').optional(),
+    // How many days ahead bookings open (1-7) and how far ahead slots are shown (up to 30)
+    booking_window_days: z.number().int().min(1).max(7).optional(),
+    listing_window_days: z.number().int().min(1).max(30).optional(),
+    min_notice_minutes: z.number().int().min(0).max(1440).optional(),
 };
+
+const windowsValid = (v: { booking_window_days?: number | undefined; listing_window_days?: number | undefined }) =>
+    v.booking_window_days === undefined || v.listing_window_days === undefined || v.listing_window_days >= v.booking_window_days;
+const WINDOW_ERROR = { message: 'listing_window_days must be at least booking_window_days', path: ['listing_window_days'] };
 
 const latLngTogether = (v: { lat?: number | null | undefined; lng?: number | null | undefined }) =>
     (v.lat === undefined) === (v.lng === undefined) && (v.lat === null) === (v.lng === null);
 const LATLNG_ERROR = { message: 'lat and lng must be provided (or cleared) together', path: ['lat'] };
 
-export const createSchema = z.strictObject({ name: cleanText(2, 100), ...venueFields }).refine(latLngTogether, LATLNG_ERROR);
+export const createSchema = z.strictObject({ name: cleanText(2, 100), ...venueFields }).refine(latLngTogether, LATLNG_ERROR).refine(windowsValid, WINDOW_ERROR);
 export const updateSchema = z
     .strictObject({ name: cleanText(2, 100).optional(), ...venueFields })
     .refine(latLngTogether, LATLNG_ERROR)
@@ -159,6 +177,10 @@ export const getManaged = async (req: Request, res: Response): Promise<void> => 
 export const update = async (req: Request, res: Response): Promise<void> => {
     const changes = parse(updateSchema, req.body);
     await validateAmenities(changes.amenities);
+    if (changes.booking_window_days !== undefined || changes.listing_window_days !== undefined) {
+        const current = await findVenueSchedule(req.venueAccess!.venue.id);
+        if (!windowsValid({ ...current!, ...changes })) throw new HttpError(400, WINDOW_ERROR.message);
+    }
     const venue = await updateVenue(req.venueAccess!.venue.id, changes as VenueInput);
     res.status(200).json({ venue });
 };

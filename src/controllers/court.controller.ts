@@ -18,6 +18,8 @@ const courtFields = {
     max_duration_minutes: z.number().int().min(30).max(720),
     is_active: z.boolean(),
     sort_order: z.number().int().min(0).max(10000),
+    // Base price per hour in paise (₹1 = 100); price rules can override it by day/time or date
+    price_per_hour_paise: z.number().int().min(100).max(100_000_000).nullable(),
 };
 
 export const createSchema = z.strictObject({
@@ -31,6 +33,7 @@ export const createSchema = z.strictObject({
     capacity: courtFields.capacity.optional(),
     min_duration_minutes: courtFields.min_duration_minutes.optional(),
     max_duration_minutes: courtFields.max_duration_minutes.optional(),
+    price_per_hour_paise: courtFields.price_per_hour_paise.optional(),
 });
 
 export const updateSchema = z
@@ -45,6 +48,7 @@ export const updateSchema = z
         max_duration_minutes: courtFields.max_duration_minutes.optional(),
         is_active: courtFields.is_active.optional(),
         sort_order: courtFields.sort_order.optional(),
+        price_per_hour_paise: courtFields.price_per_hour_paise.optional(),
     })
     .refine((v) => Object.keys(v).length > 0, 'Nothing to update');
 

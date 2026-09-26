@@ -20,12 +20,14 @@ export interface Profile {
     status: UserStatus;
     onboarded_at: string | null;
     last_login_at: string | null;
+    notify_email: boolean;
+    notify_push: boolean;
     created_at: string;
     updated_at: string;
 }
 
 // Fields a user may change on their own profile (role/status are admin-only)
-export type ProfileUpdate = Partial<Pick<Profile, 'full_name' | 'avatar_url' | 'city' | 'phone' | 'preferred_sports'>>;
+export type ProfileUpdate = Partial<Pick<Profile, 'full_name' | 'avatar_url' | 'city' | 'phone' | 'preferred_sports' | 'notify_email' | 'notify_push'>>;
 export type AdminProfileUpdate = Partial<Pick<Profile, 'role' | 'status'>>;
 
 const TABLE = 'profiles';

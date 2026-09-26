@@ -1,5 +1,6 @@
 import { thumbKey } from '../lib/image.js';
 import { publicUrl } from '../lib/r2.js';
+import { getVenueHours } from './schedule.model.js';
 import { supabaseAdmin } from '../lib/supabase.js';
 
 export const VENUE_STATUSES = ['draft', 'pending_review', 'live', 'rejected', 'suspended'] as const;
@@ -27,6 +28,9 @@ export interface VenueRow {
     amenities: string[];
     rules: string | null;
     timezone: string;
+    booking_window_days: number;
+    listing_window_days: number;
+    min_notice_minutes: number;
     status: VenueStatus;
     status_reason: string | null;
     submitted_at: string | null;
@@ -39,12 +43,13 @@ export interface VenueRow {
 
 export type VenueInput = Partial<Pick<VenueRow,
     'name' | 'description' | 'phone' | 'email' | 'address_line' | 'locality' | 'city' | 'state' |
-    'pincode' | 'lat' | 'lng' | 'amenities' | 'rules' | 'timezone'>>;
+    'pincode' | 'lat' | 'lng' | 'amenities' | 'rules' | 'timezone' |
+    'booking_window_days' | 'listing_window_days' | 'min_notice_minutes'>>;
 
 // Every column except the generated PostGIS `location`, which PostgREST returns as hex WKB
-const VENUE_COLUMNS = 'id, owner_id, name, slug, description, phone, email, address_line, locality, city, state, pincode, lat, lng, amenities, rules, timezone, status, status_reason, submitted_at, reviewed_by, reviewed_at, deleted_at, created_at, updated_at';
-const PUBLIC_VENUE_COLUMNS = 'id, name, slug, description, phone, email, address_line, locality, city, state, pincode, lat, lng, amenities, rules, timezone, created_at';
-const PUBLIC_COURT_COLUMNS = 'id, name, sport_id, is_indoor, surface, capacity, base_slot_minutes, min_duration_minutes, max_duration_minutes, sort_order';
+const VENUE_COLUMNS = 'id, owner_id, name, slug, description, phone, email, address_line, locality, city, state, pincode, lat, lng, amenities, rules, timezone, booking_window_days, listing_window_days, min_notice_minutes, status, status_reason, submitted_at, reviewed_by, reviewed_at, deleted_at, created_at, updated_at';
+const PUBLIC_VENUE_COLUMNS = 'id, name, slug, description, phone, email, address_line, locality, city, state, pincode, lat, lng, amenities, rules, timezone, booking_window_days, listing_window_days, min_notice_minutes, created_at';
+const PUBLIC_COURT_COLUMNS = 'id, name, sport_id, is_indoor, surface, capacity, base_slot_minutes, min_duration_minutes, max_duration_minutes, price_per_hour_paise, uses_venue_hours, sort_order';
 
 export const photoUrl = (key: string): string => publicUrl(key);
 export const thumbUrl = (key: string): string => publicUrl(thumbKey(key));
@@ -101,13 +106,14 @@ export const transitionVenue = async (id: string, action: VenueAction, actorId: 
 export const getManagedVenue = async (id: string) => {
     const venue = await findVenueRow(id);
     if (!venue) return null;
-    const [courts, photos] = await Promise.all([
+    const [courts, photos, hours] = await Promise.all([
         supabaseAdmin.from('courts').select('*').eq('venue_id', id).is('deleted_at', null).order('sort_order').order('created_at'),
         supabaseAdmin.from('venue_photos').select('id, storage_path, is_cover, sort_order, created_at').eq('venue_id', id).order('sort_order'),
+        getVenueHours(id),
     ]);
     if (courts.error) throw courts.error;
     if (photos.error) throw photos.error;
-    return { ...venue, courts: courts.data, photos: withPhotoUrls(photos.data) };
+    return { ...venue, courts: courts.data, photos: withPhotoUrls(photos.data), hours: hours.venue, court_hours: hours.courts };
 };
 
 // Public venue page: only live venues of active owners
@@ -125,15 +131,16 @@ export const getPublicVenue = async (key: { id: string } | { slug: string }) => 
     if (!data) return null;
 
     const { owner: _owner, ...venue } = data as Record<string, unknown> & { id: string };
-    const [courts, photos] = await Promise.all([
+    const [courts, photos, hours] = await Promise.all([
         supabaseAdmin.from('courts').select(PUBLIC_COURT_COLUMNS).eq('venue_id', venue.id).eq('is_active', true).is('deleted_at', null).order('sort_order').order('created_at'),
         supabaseAdmin.from('venue_photos').select('id, storage_path, is_cover, sort_order').eq('venue_id', venue.id).order('sort_order'),
+        getVenueHours(venue.id),
     ]);
     if (courts.error) throw courts.error;
     if (photos.error) throw photos.error;
 
     const sports = [...new Set((courts.data as { sport_id: string }[]).map((c) => c.sport_id))].sort();
-    return { ...venue, sports, courts: courts.data, photos: withPhotoUrls(photos.data) };
+    return { ...venue, sports, courts: courts.data, photos: withPhotoUrls(photos.data), hours: hours.venue, court_hours: hours.courts };
 };
 
 export interface SearchParams {

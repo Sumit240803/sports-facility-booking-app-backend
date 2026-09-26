@@ -11,6 +11,8 @@ export interface Court {
     base_slot_minutes: 30 | 60;
     min_duration_minutes: number;
     max_duration_minutes: number;
+    price_per_hour_paise: number | null;
+    uses_venue_hours: boolean;
     is_active: boolean;
     sort_order: number;
     deleted_at: string | null;
@@ -20,7 +22,7 @@ export interface Court {
 
 export type CourtInput = Partial<Pick<Court,
     'name' | 'sport_id' | 'is_indoor' | 'surface' | 'capacity' | 'base_slot_minutes' |
-    'min_duration_minutes' | 'max_duration_minutes' | 'is_active' | 'sort_order'>>;
+    'min_duration_minutes' | 'max_duration_minutes' | 'price_per_hour_paise' | 'is_active' | 'sort_order'>>;
 
 export const listCourts = async (venueId: string): Promise<Court[]> => {
     const { data, error } = await supabaseAdmin
