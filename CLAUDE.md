@@ -52,7 +52,7 @@ Venue owners list venues; venue staff manage day-to-day bookings; admins approve
   staff = blocks + read. Owner only: delete venue, submit/unpublish, staff management.
 
 - Phase 3 (`004_bookings.sql`): `bookings` with exclusion constraint `bookings_no_overlap` (court + tstzrange,
-  ignoring cancelled/expired) = no double booking. Methods: `online` (10% platform-funded discount, 10-min
+  ignoring cancelled/expired) = no double booking. Methods: `online` (5% platform-funded discount, `booking.onlineDiscountPercent`, 10-min
   `pending_payment` hold), `pay_at_venue` (only inside venue `pay_at_venue_window_minutes`, switchable per venue,
   max ONE upcoming per player), `offline` (staff walk-in). `prepare_booking()` validates + prices (quote),
   `create_booking()` (idempotent per user+key), `cancel_booking()` (player: policy snapshot refund; venue/admin:
@@ -74,9 +74,35 @@ Venue owners list venues; venue staff manage day-to-day bookings; admins approve
   Payouts: `manual` (admin records transfer + UTR) or `route` (daily automatic Razorpay transfer of the balance;
   unknown outcomes stay `processing` for admin resolve, never retried automatically).
 
+- Phase 5 (`008_reviews_dashboards.sql`): `reviews` (one per player per venue, only after a completed booking,
+  `submit_review()`; owner/manager reply; admin hide/unhide; trigger keeps `venues.rating_avg/rating_count` from
+  visible reviews; public author = first name only), `favourites` (max 200, live venues only), search `min_rating` +
+  `sort=rating`, `venue_dashboard()` (owner) and `admin_dashboard()` (platform; `gateway_fee_bps()` = 236,
+  `booking_platform_revenue()`, `booking_commission()`). Public venue page personalises (`is_favourite`) with
+  `optionalAuth` and then is not cacheable.
+
 ## Roadmap
 1. Venues & courts (browse, owner CRUD, photos, admin review) ← done
 2. Availability & pricing (hours, price rules, blocks, computed slots, reminders, notifications) ← done
 3. Bookings (exclusion constraint against double booking, holds, staff check-in, cancellation policy) ← done
 4. Payments (Razorpay, webhooks, refunds, payouts) ← done
-5. Reviews, favourites, notifications, owner dashboard
+5. Reviews, favourites, owner & admin dashboards ← done
+
+Migrations 001–008 are applied to the Supabase project.
+
+## Open items (as of 2026-09-27)
+- Pricing decided (2026-09-28): **5% online discount (platform-funded), 10% commission**. Razorpay fee is 2% + 18% GST
+  = 2.36% per transaction (kept by Razorpay even on refunds). Platform ≈ +₹6.9 per ₹250 online booking.
+- **Credentials not yet provided** (features built and tested with mocks/dummies, not against the real service):
+  R2 keys (real photo upload untested), Razorpay keys + webhook secret (user creating account; Route must be
+  activated separately for automatic payouts), Firebase service account (push), Resend + a verified domain (email;
+  user has no domain yet).
+- UPI fix (007) not exercised against a real row yet (no venues existed when checked).
+
+## Testing approach
+- End-to-end scripts are written temporarily as `src/_e2e.ts`, run against the real Supabase project with a server
+  started on a spare port (dummy R2 env vars, `JOBS_ENABLED=false`, jobs driven by calling `runNotificationsTick()`),
+  then deleted. They create throwaway users via `auth.admin.createUser` + magic-link `verifyOtp` sessions and clean
+  up everything (delete ledger/payouts/refunds/payments/bookings before venues; venue hard delete only in tests).
+- Razorpay is mocked with a local HTTP server via `RAZORPAY_API_BASE`.
+- After each phase also verify Swagger ↔ routes (all routes documented, none extra).

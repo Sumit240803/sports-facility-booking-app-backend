@@ -1,6 +1,7 @@
 import express from 'express';
 import * as adminController from '../controllers/admin.controller.js';
 import * as catalogController from '../controllers/catalog.controller.js';
+import * as engagementController from '../controllers/engagement.controller.js';
 import * as payoutController from '../controllers/payout.controller.js';
 import * as venueController from '../controllers/venue.controller.js';
 import * as venueOwnerController from '../controllers/venueOwner.controller.js';
@@ -21,6 +22,11 @@ router.post('/venues/:venueId/approve', requireVenueAccess(), venueController.ad
 router.post('/venues/:venueId/reject', requireVenueAccess(), venueController.adminAction('reject'));
 router.post('/venues/:venueId/suspend', requireVenueAccess(), venueController.adminAction('suspend'));
 router.post('/venues/:venueId/reinstate', requireVenueAccess(), venueController.adminAction('reinstate'));
+
+router.get('/dashboard', engagementController.platformDashboard);
+router.get('/reviews', engagementController.adminReviews);
+router.post('/reviews/:reviewId/hide', engagementController.hideReview);
+router.post('/reviews/:reviewId/unhide', engagementController.unhideReview);
 
 router.get('/payouts/balances', payoutController.balances);
 router.get('/payouts', payoutController.adminPayouts);

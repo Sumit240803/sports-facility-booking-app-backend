@@ -21,6 +21,19 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
     next();
 };
 
+// For public endpoints that personalise when logged in: sets req.user if a valid token is sent
+export const optionalAuth = async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
+    const token = getBearerToken(req);
+    if (token) {
+        const { data } = await supabaseAdmin.auth.getUser(token);
+        if (data.user) {
+            const profile = await getOrCreateProfile(data.user);
+            if (profile.status === 'active') req.user = profile;
+        }
+    }
+    next();
+};
+
 // Use after requireAuth: requireRole('venue_owner', 'admin')
 export const requireRole = (...roles: UserRole[]) =>
     (req: Request, res: Response, next: NextFunction): void => {

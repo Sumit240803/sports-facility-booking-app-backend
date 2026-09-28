@@ -17,6 +17,7 @@ import {
     VENUE_STATUSES,
     type VenueInput,
 } from '../models/venue.model.js';
+import { isFavourite } from '../models/engagement.model.js';
 import { findVenueSchedule } from '../models/schedule.model.js';
 import { HttpError } from '../utils/http.js';
 import { cleanText, escapeLike, longText, pagination, parse, phoneSchema, slugId } from '../utils/validate.js';
@@ -109,7 +110,8 @@ export const searchSchema = z
         lat: z.coerce.number().min(-90).max(90).optional(),
         lng: z.coerce.number().min(-180).max(180).optional(),
         radius_km: z.coerce.number().min(1).max(100).optional(),
-        sort: z.enum(['name', 'distance', 'newest']).optional(),
+        sort: z.enum(['name', 'distance', 'newest', 'rating']).optional(),
+        min_rating: z.coerce.number().min(1).max(5).optional(),
         ...pagination,
     })
     .refine((v) => (v.lat === undefined) === (v.lng === undefined), { message: 'lat and lng must be provided together', path: ['lat'] })
@@ -128,6 +130,7 @@ export const search = async (req: Request, res: Response): Promise<void> => {
         lng: p.lng,
         radiusKm: p.radius_km,
         sort: p.sort ?? (p.lat !== undefined ? 'distance' : 'name'),
+        minRating: p.min_rating,
         limit: p.limit,
         offset: (p.page - 1) * p.limit,
     });
@@ -149,6 +152,12 @@ export const getPublic = async (req: Request, res: Response): Promise<void> => {
 
     const venue = await getPublicVenue(isId ? { id: key } : { slug: key });
     if (!venue) { res.status(404).json({ error: 'Venue not found' }); return; }
+    if (req.user) {
+        // Personalised response: must not be cached by shared caches
+        res.set('Cache-Control', 'private, no-store');
+        res.status(200).json({ venue: { ...venue, is_favourite: await isFavourite(req.user.id, venue.id as string) } });
+        return;
+    }
     res.set('Cache-Control', 'public, max-age=30');
     res.status(200).json({ venue });
 };

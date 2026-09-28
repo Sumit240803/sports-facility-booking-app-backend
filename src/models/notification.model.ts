@@ -4,6 +4,12 @@ const MAX_PUSH_TOKENS_PER_USER = 20;
 
 // ---------- Notifications ----------
 
+// In-app notification + email/push deliveries according to the user's preferences
+export const notifyUser = async (userId: string, type: string, title: string, body: string, data: Record<string, unknown>): Promise<void> => {
+    const { error } = await supabaseAdmin.rpc('notify_user', { p_user_id: userId, p_type: type, p_title: title, p_body: body, p_data: data });
+    if (error) throw error;
+};
+
 export const listNotifications = async (userId: string, unreadOnly: boolean, limit: number, offset: number) => {
     let query = supabaseAdmin
         .from('notifications')

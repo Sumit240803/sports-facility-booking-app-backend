@@ -49,7 +49,7 @@ export const env = {
     },
     booking: {
         // Platform-funded discount on online payments; venues are paid on the full price
-        onlineDiscountPercent: 10,
+        onlineDiscountPercent: 5,
         // How long an unpaid online booking holds its slot
         holdMinutes: 10,
     },

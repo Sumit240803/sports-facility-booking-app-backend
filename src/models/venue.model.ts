@@ -52,7 +52,7 @@ export type VenueInput = Partial<Pick<VenueRow,
 
 // Every column except the generated PostGIS `location`, which PostgREST returns as hex WKB
 const VENUE_COLUMNS = 'id, owner_id, name, slug, description, phone, email, address_line, locality, city, state, pincode, lat, lng, amenities, rules, timezone, booking_window_days, listing_window_days, min_notice_minutes, pay_at_venue_enabled, pay_at_venue_window_minutes, cancellation_policy, status, status_reason, submitted_at, reviewed_by, reviewed_at, deleted_at, created_at, updated_at';
-const PUBLIC_VENUE_COLUMNS = 'id, name, slug, description, phone, email, address_line, locality, city, state, pincode, lat, lng, amenities, rules, timezone, booking_window_days, listing_window_days, min_notice_minutes, pay_at_venue_enabled, pay_at_venue_window_minutes, cancellation_policy, created_at';
+const PUBLIC_VENUE_COLUMNS = 'id, name, slug, description, phone, email, address_line, locality, city, state, pincode, lat, lng, amenities, rules, timezone, booking_window_days, listing_window_days, min_notice_minutes, pay_at_venue_enabled, pay_at_venue_window_minutes, cancellation_policy, rating_avg, rating_count, created_at';
 const PUBLIC_COURT_COLUMNS = 'id, name, sport_id, is_indoor, surface, capacity, base_slot_minutes, min_duration_minutes, max_duration_minutes, price_per_hour_paise, uses_venue_hours, sort_order';
 
 export const photoUrl = (key: string): string => publicUrl(key);
@@ -155,7 +155,8 @@ export interface SearchParams {
     lat?: number | undefined;
     lng?: number | undefined;
     radiusKm?: number | undefined;
-    sort: 'name' | 'distance' | 'newest';
+    sort: 'name' | 'distance' | 'newest' | 'rating';
+    minRating?: number | undefined;
     limit: number;
     offset: number;
 }
@@ -172,6 +173,7 @@ export const searchVenues = async (p: SearchParams) => {
         p_sort: p.sort,
         p_limit: p.limit,
         p_offset: p.offset,
+        p_min_rating: p.minRating ?? null,
     });
     if (error) throw error;
     const rows = (data ?? []) as Array<Record<string, unknown> & { cover_path: string | null; total_count: number; distance_km: number | null }>;
@@ -180,6 +182,7 @@ export const searchVenues = async (p: SearchParams) => {
         venues: rows.map(({ cover_path, total_count: _total, distance_km, ...v }) => ({
             ...v,
             distance_km: distance_km === null ? null : Math.round(distance_km * 10) / 10,
+            rating_avg: v.rating_avg === null ? null : Number(v.rating_avg),
             cover_url: cover_path ? thumbUrl(cover_path) : null,
         })),
     };

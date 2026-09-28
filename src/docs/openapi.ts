@@ -4,6 +4,7 @@ import { z } from 'zod';
 import * as booking from '../controllers/booking.controller.js';
 import * as catalog from '../controllers/catalog.controller.js';
 import * as court from '../controllers/court.controller.js';
+import * as engagement from '../controllers/engagement.controller.js';
 import * as me from '../controllers/me.controller.js';
 import * as payment from '../controllers/payment.controller.js';
 import * as payout from '../controllers/payout.controller.js';
@@ -167,6 +168,8 @@ const schemas: Record<string, Json> = {
         sports: { type: 'array', items: { type: 'string' } },
         cover_url: { type: ['string', 'null'], description: 'Cover thumbnail' },
         distance_km: { type: ['number', 'null'] },
+        rating_avg: { type: ['number', 'null'], description: '1.0-5.0, null until the first review' },
+        rating_count: { type: 'integer' },
     }),
     PublicVenue: {
         allOf: [
@@ -176,6 +179,9 @@ const schemas: Record<string, Json> = {
                 courts: { type: 'array', items: ref('Court') },
                 photos: { type: 'array', items: ref('Photo') },
                 hours: { type: 'array', items: ref('HoursRange') },
+                rating_avg: { type: ['number', 'null'] },
+                rating_count: { type: 'integer' },
+                is_favourite: { type: 'boolean', description: 'Only when called with a valid access token' },
                 court_hours: { type: 'object', additionalProperties: { type: 'array', items: ref('HoursRange') } },
             }),
         ],
@@ -367,6 +373,30 @@ const schemas: Record<string, Json> = {
         bank_ifsc: { type: ['string', 'null'] },
         upi_id: { type: ['string', 'null'] },
     }),
+    Review: obj({
+        id: { type: 'string', format: 'uuid' },
+        venue_id: { type: 'string', format: 'uuid' },
+        rating: { type: 'integer', minimum: 1, maximum: 5 },
+        comment: { type: ['string', 'null'] },
+        owner_reply: { type: ['string', 'null'] },
+        owner_replied_at: { type: ['string', 'null'], format: 'date-time' },
+        author: obj({ name: { type: 'string', description: 'First name only' }, avatar_url: { type: ['string', 'null'] } }),
+        created_at: { type: 'string', format: 'date-time' },
+        updated_at: { type: 'string', format: 'date-time' },
+    }),
+    RatingBreakdown: obj({ 1: { type: 'integer' }, 2: { type: 'integer' }, 3: { type: 'integer' }, 4: { type: 'integer' }, 5: { type: 'integer' } }),
+    Favourite: obj({
+        id: { type: 'string', format: 'uuid' },
+        name: { type: 'string' },
+        slug: { type: 'string' },
+        city: { type: ['string', 'null'] },
+        locality: { type: ['string', 'null'] },
+        rating_avg: { type: ['number', 'null'] },
+        rating_count: { type: 'integer' },
+        cover_url: { type: ['string', 'null'] },
+        available: { type: 'boolean', description: 'false if the venue is currently unlisted, suspended or deleted' },
+        saved_at: { type: 'string', format: 'date-time' },
+    }),
     StaffList: obj({
         members: { type: 'array', items: obj({ role: { type: 'string', enum: ['manager', 'staff'] }, created_at: { type: 'string' }, user: ref('Profile') }) },
         pending_invites: { type: 'array', items: obj({ email: { type: 'string' }, role: { type: 'string' }, created_at: { type: 'string' } }) },
@@ -417,6 +447,7 @@ export const openApiSpec: Json = {
         { name: 'Hours & pricing' }, { name: 'Blocks' }, { name: 'Availability' },
         { name: 'Bookings' }, { name: 'Front desk' },
         { name: 'Payments' }, { name: 'Earnings' },
+        { name: 'Reviews' }, { name: 'Favourites' }, { name: 'Dashboards' },
         { name: 'Staff' }, { name: 'Me' }, { name: 'Admin' },
     ],
     components: {
@@ -520,7 +551,8 @@ export const openApiSpec: Json = {
                     query('lat', { type: 'number' }),
                     query('lng', { type: 'number' }),
                     query('radius_km', { type: 'number', minimum: 1, maximum: 100 }, 'Requires lat/lng'),
-                    query('sort', { type: 'string', enum: ['name', 'distance', 'newest'] }, 'Defaults to distance when lat/lng given, else name'),
+                    query('sort', { type: 'string', enum: ['name', 'distance', 'newest', 'rating'] }, 'Defaults to distance when lat/lng given, else name'),
+                    query('min_rating', { type: 'number', minimum: 1, maximum: 5 }),
                     ...pageParams,
                 ],
                 responses: { 200: ok('Results', paged('VenueSearchResult')), 400: E[400] },
@@ -542,6 +574,7 @@ export const openApiSpec: Json = {
         },
         '/venues/{idOrSlug}': {
             get: op('Venues (public)', 'Public venue page', {
+                description: 'Send an access token (optional) to also get is_favourite.',
                 parameters: [pathParam('idOrSlug', 'Venue id or slug')],
                 responses: { 200: ok('Venue', obj({ venue: ref('PublicVenue') })), 404: E[404] },
             }),
@@ -724,7 +757,7 @@ export const openApiSpec: Json = {
             post: op('Bookings', 'Book a court', {
                 description: [
                     '`date` is the availability date the slot is listed under; `start` must be a slot start; duration a multiple of the court slot length within its min/max.',
-                    '**online**: 10% off (platform-funded); status `pending_payment`, holds the slot until `expires_at` (10 min). Then call `POST /me/bookings/{id}/pay` and open Razorpay Checkout.',
+                    '**online**: 5% off (platform-funded); status `pending_payment`, holds the slot until `expires_at` (10 min). Then call `POST /me/bookings/{id}/pay` and open Razorpay Checkout.',
                     '**pay_at_venue**: confirmed immediately; only when the venue allows it, within its pay-at-venue window before the slot, and only one upcoming pay-at-venue booking per player.',
                     'Send an `Idempotency-Key` header (8-100 chars) so retries never double book; a repeat returns the same booking. Requires a completed profile. 20 attempts/min per user.',
                 ].join('\n\n'),
@@ -848,6 +881,75 @@ export const openApiSpec: Json = {
         },
         '/admin/refunds/{refundId}/retry': {
             post: op('Admin', 'Retry a failed refund', { security: auth, parameters: [pathParam('refundId', 'Refund id', 'uuid')], responses: { 204: { description: 'Queued' }, 409: err('Not failed') } }),
+        },
+
+        // ---------------- Reviews ----------------
+        '/venues/{idOrSlug}/reviews': {
+            get: op('Reviews', 'Visible reviews of a live venue', {
+                parameters: [pathParam('idOrSlug', 'Venue id or slug'), query('sort', { type: 'string', enum: ['newest', 'highest', 'lowest'], default: 'newest' }), ...pageParams],
+                responses: { 200: ok('Reviews', obj({ reviews: { type: 'array', items: ref('Review') }, breakdown: ref('RatingBreakdown'), total: { type: 'integer' }, page: { type: 'integer' }, limit: { type: 'integer' } })), 404: E[404] },
+            }),
+        },
+        '/me/reviews': {
+            get: op('Reviews', 'My reviews', { security: auth, responses: { 200: ok('Reviews') } }),
+        },
+        '/me/reviews/{venueId}': {
+            put: op('Reviews', 'Write or update my review of a venue', {
+                description: 'One review per player per venue; allowed once the player has played there (a completed booking). Updating keeps a single review.',
+                security: auth, parameters: [pathParam('venueId', 'Venue id', 'uuid')], requestBody: body(fromZod(engagement.reviewSchema)),
+                responses: { 200: ok('Saved', obj({ review: ref('Review') })), 400: E[400], 404: E[404], 409: err('Not played there yet') },
+            }),
+            delete: op('Reviews', 'Delete my review', { security: auth, parameters: [pathParam('venueId', 'Venue id', 'uuid')], responses: { 204: { description: 'Deleted' }, 404: E[404] } }),
+        },
+        '/venues/{venueId}/manage/reviews': {
+            get: op('Reviews', 'All reviews incl. hidden (any staff)', {
+                security: auth, parameters: [venueId, query('sort', { type: 'string', enum: ['newest', 'highest', 'lowest'] }), ...pageParams],
+                responses: { 200: ok('Reviews'), 403: E[403] },
+            }),
+        },
+        '/venues/{venueId}/reviews/{reviewId}/reply': {
+            put: op('Reviews', 'Reply to a review (owner, manager); the player is notified', {
+                security: auth, parameters: [venueId, pathParam('reviewId', 'Review id', 'uuid')], requestBody: body(fromZod(engagement.replySchema)),
+                responses: { 200: ok('Replied', obj({ review: ref('Review') })), 400: E[400], 403: E[403], 404: E[404] },
+            }),
+            delete: op('Reviews', 'Remove the reply (owner, manager)', { security: auth, parameters: [venueId, pathParam('reviewId', 'Review id', 'uuid')], responses: { 200: ok('Removed'), 404: E[404] } }),
+        },
+        '/admin/reviews': {
+            get: op('Admin', 'List reviews for moderation', { security: auth, parameters: [query('status', { type: 'string', enum: ['visible', 'hidden'] }), ...pageParams], responses: { 200: ok('Reviews') } }),
+        },
+        '/admin/reviews/{reviewId}/hide': {
+            post: op('Admin', 'Hide a review (removed from ratings)', {
+                security: auth, parameters: [pathParam('reviewId', 'Review id', 'uuid')], requestBody: body(fromZod(engagement.hideSchema)),
+                responses: { 200: ok('Hidden'), 400: E[400], 404: E[404] },
+            }),
+        },
+        '/admin/reviews/{reviewId}/unhide': {
+            post: op('Admin', 'Make a hidden review visible again', { security: auth, parameters: [pathParam('reviewId', 'Review id', 'uuid')], responses: { 200: ok('Visible'), 404: E[404] } }),
+        },
+
+        // ---------------- Favourites ----------------
+        '/me/favourites': {
+            get: op('Favourites', 'My favourite venues', { security: auth, responses: { 200: ok('Favourites', obj({ favourites: { type: 'array', items: ref('Favourite') } })) } }),
+        },
+        '/me/favourites/{venueId}': {
+            put: op('Favourites', 'Save a live venue (idempotent, max 200)', { security: auth, parameters: [pathParam('venueId', 'Venue id', 'uuid')], responses: { 204: { description: 'Saved' }, 404: E[404], 409: err('Limit reached') } }),
+            delete: op('Favourites', 'Remove from favourites', { security: auth, parameters: [pathParam('venueId', 'Venue id', 'uuid')], responses: { 204: { description: 'Removed' }, 404: E[404] } }),
+        },
+
+        // ---------------- Dashboards ----------------
+        '/venues/{venueId}/dashboard': {
+            get: op('Dashboards', 'Owner dashboard (owner, admin)', {
+                description: 'Venue-local dates, default last 30 days, max 366. Bookings by status/method, cancellation & no-show rates, money (booked value, online received, collected at venue, refunds, venue earnings, commission, current balance), per-court occupancy (booked vs open minutes), daily series, peak hours (day of week × hour), ratings, today\'s upcoming bookings.',
+                security: auth, parameters: [venueId, query('from', { type: 'string', format: 'date' }), query('to', { type: 'string', format: 'date' })],
+                responses: { 200: ok('Dashboard', obj({ dashboard: { type: 'object' } })), 400: E[400], 403: E[403] },
+            }),
+        },
+        '/admin/dashboard': {
+            get: op('Admin', 'Platform dashboard', {
+                description: 'Asia/Kolkata dates, default last 30 days, max 366. Booking counts, gross booking value, online captured, refunds, discounts given, platform revenue before fees, Razorpay fees (2% + 18% GST), platform net, amount owed to venues, venue/user counts, items needing attention, top 10 venues.',
+                security: auth, parameters: [query('from', { type: 'string', format: 'date' }), query('to', { type: 'string', format: 'date' })],
+                responses: { 200: ok('Dashboard', obj({ dashboard: { type: 'object' } })), 400: E[400], 403: E[403] },
+            }),
         },
 
         // ---------------- Front desk (venue staff) ----------------

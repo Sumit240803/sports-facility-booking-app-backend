@@ -1,11 +1,12 @@
 import express from 'express';
 import * as bookingController from '../controllers/booking.controller.js';
 import * as courtController from '../controllers/court.controller.js';
+import * as engagementController from '../controllers/engagement.controller.js';
 import * as payoutController from '../controllers/payout.controller.js';
 import * as scheduleController from '../controllers/schedule.controller.js';
 import * as photoController from '../controllers/venuePhoto.controller.js';
 import * as venueController from '../controllers/venue.controller.js';
-import { requireAuth, requireRole, requireVenueAccess } from '../middlewares/auth.middleware.js';
+import { optionalAuth, requireAuth, requireRole, requireVenueAccess } from '../middlewares/auth.middleware.js';
 import venueStaffRoutes from './venueStaff.routes.js';
 
 const router = express.Router();
@@ -67,6 +68,14 @@ router.put('/:venueId/photos/order', ...managers, photoController.reorder);
 router.put('/:venueId/photos/:photoId/cover', ...managers, photoController.makeCover);
 router.delete('/:venueId/photos/:photoId', ...managers, photoController.remove);
 
+// Reviews (venue team)
+router.get('/:venueId/manage/reviews', ...anyStaff, engagementController.manageReviews);
+router.put('/:venueId/reviews/:reviewId/reply', ...managers, engagementController.replyToReview);
+router.delete('/:venueId/reviews/:reviewId/reply', ...managers, engagementController.deleteReply);
+
+// Dashboard (owner only)
+router.get('/:venueId/dashboard', ...ownerOnly, engagementController.ownerDashboard);
+
 // Earnings & payouts (owner only)
 router.get('/:venueId/earnings', ...ownerOnly, payoutController.earnings);
 router.get('/:venueId/payout-settings', ...ownerOnly, payoutController.getSettings);
@@ -77,6 +86,7 @@ router.use('/:venueId/staff', venueStaffRoutes);
 
 // Public venue page and availability by id or slug (keep last so they don't shadow the routes above)
 router.get('/:idOrSlug/availability', scheduleController.publicAvailability);
-router.get('/:idOrSlug', venueController.getPublic);
+router.get('/:idOrSlug/reviews', engagementController.venueReviews);
+router.get('/:idOrSlug', optionalAuth, venueController.getPublic);
 
 export default router;
