@@ -1,6 +1,8 @@
 import type { Request, Response } from 'express';
+import { z } from 'zod';
 import {
     findProfileById,
+    listUsers,
     updateProfile,
     USER_ROLES,
     USER_STATUSES,
@@ -9,6 +11,22 @@ import {
     type UserStatus,
 } from '../models/user.model.js';
 import { UUID_RE } from '../utils/validation.js';
+import { escapeLike, pagination, parse } from '../utils/validate.js';
+
+const listUsersSchema = z.object({
+    // Commas and parentheses would break the PostgREST or() filter; they never occur in emails/names/phones we match
+    q: z.string().trim().max(80).transform((s) => escapeLike(s.replace(/[,()]/g, ' ').trim())).optional(),
+    role: z.enum(USER_ROLES).optional(),
+    status: z.enum(USER_STATUSES).optional(),
+    ...pagination,
+});
+
+// GET /admin/users?q=&role=&status=&page=&limit=
+export const listUsersHandler = async (req: Request, res: Response): Promise<void> => {
+    const p = parse(listUsersSchema, req.query);
+    const { users, total } = await listUsers({ q: p.q || undefined, role: p.role, status: p.status }, p.limit, (p.page - 1) * p.limit);
+    res.status(200).json({ users, page: p.page, limit: p.limit, total });
+};
 
 // PATCH /admin/users/:userId  { role?, status? }
 export const updateUser = async (req: Request, res: Response): Promise<void> => {

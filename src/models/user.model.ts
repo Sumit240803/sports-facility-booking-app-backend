@@ -77,3 +77,23 @@ export const updateProfile = async (
 // Onboarding is complete once the user has given name, phone and city
 export const isOnboardingComplete = (p: Pick<Profile, 'full_name' | 'phone' | 'city'>): boolean =>
     Boolean(p.full_name && p.phone && p.city);
+
+// Admin: search users by email, name or phone (newest first)
+export const listUsers = async (
+    filters: { q?: string | undefined; role?: UserRole | undefined; status?: UserStatus | undefined },
+    limit: number,
+    offset: number,
+) => {
+    let query = supabaseAdmin
+        .from(TABLE)
+        .select('id, email, full_name, avatar_url, phone, city, role, status, onboarded_at, last_login_at, created_at', { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .range(offset, offset + limit - 1);
+    // q is already LIKE-escaped and stripped of PostgREST filter syntax by the controller
+    if (filters.q) query = query.or(`email.ilike.%${filters.q}%,full_name.ilike.%${filters.q}%,phone.ilike.%${filters.q}%`);
+    if (filters.role) query = query.eq('role', filters.role);
+    if (filters.status) query = query.eq('status', filters.status);
+    const { data, error, count } = await query;
+    if (error) throw error;
+    return { users: data, total: count ?? 0 };
+};

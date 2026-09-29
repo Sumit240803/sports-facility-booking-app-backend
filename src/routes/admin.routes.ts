@@ -15,6 +15,7 @@ router.get('/owner-applications', venueOwnerController.listApplications);
 router.post('/owner-applications/:userId/approve', venueOwnerController.approveApplication);
 router.post('/owner-applications/:userId/reject', venueOwnerController.rejectApplication);
 
+router.get('/users', adminController.listUsersHandler);
 router.patch('/users/:userId', adminController.updateUser);
 
 router.get('/venues', venueController.adminList);

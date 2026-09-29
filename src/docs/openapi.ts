@@ -528,6 +528,21 @@ export const openApiSpec: Json = {
                 responses: { 200: ok('Rejected'), 400: E[400], 404: err('No pending application') },
             }),
         },
+        '/admin/users': {
+            get: op('Admin', 'Search users', {
+                security: auth,
+                parameters: [
+                    query('q', { type: 'string', maxLength: 80 }, 'Matches email, name or phone (case-insensitive)'),
+                    query('role', { type: 'string', enum: ['player', 'venue_owner', 'admin'] }),
+                    query('status', { type: 'string', enum: ['active', 'suspended'] }),
+                    ...pageParams,
+                ],
+                responses: {
+                    200: ok('Users, newest first', obj({ users: { type: 'array', items: ref('Profile') }, page: { type: 'integer' }, limit: { type: 'integer' }, total: { type: 'integer' } })),
+                    400: E[400],
+                },
+            }),
+        },
         '/admin/users/{userId}': {
             patch: op('Admin', 'Change a user role and/or status', {
                 security: auth, parameters: [pathParam('userId', 'User id', 'uuid')],
