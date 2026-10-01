@@ -9,6 +9,8 @@ const required = (name: string): string => {
 export const env = {
     port: Number(process.env.PORT) || 3000,
     isProd: process.env.NODE_ENV === 'production',
+    // Number of reverse proxies in front of the app (Render/Heroku-style hosts: 1) so req.ip is the client IP
+    trustProxy: Number(process.env.TRUST_PROXY) || 0,
     supabaseUrl: required('SUPABASE_URL'),
     supabaseAnonKey: required('SUPABASE_ANON_KEY'),
     supabaseServiceRoleKey: required('SUPABASE_SERVICE_ROLE_KEY'),

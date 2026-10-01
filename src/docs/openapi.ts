@@ -448,13 +448,17 @@ export const openApiSpec: Json = {
         { name: 'Bookings' }, { name: 'Front desk' },
         { name: 'Payments' }, { name: 'Earnings' },
         { name: 'Reviews' }, { name: 'Favourites' }, { name: 'Dashboards' },
-        { name: 'Staff' }, { name: 'Me' }, { name: 'Admin' },
+        { name: 'Staff' }, { name: 'Me' }, { name: 'Admin' }, { name: 'System' },
     ],
     components: {
         securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' } },
         schemas,
     },
     paths: {
+        '/health': {
+            get: op('System', 'Liveness check', { responses: { 200: ok('Server is up', obj({ ok: { type: 'boolean' } })) } }),
+        },
+
         // ---------------- Auth ----------------
         '/auth/oauth/{provider}': {
             get: op('Auth', 'Start OAuth sign-in', {

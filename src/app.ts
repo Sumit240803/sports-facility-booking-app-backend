@@ -11,6 +11,10 @@ import { HttpError } from "./utils/http.js";
 const app = express();
 
 app.disable("x-powered-by");
+if (env.trustProxy) app.set("trust proxy", env.trustProxy);
+
+// Liveness probe for the host (no auth, no DB)
+app.get("/api/health", (_req: Request, res: Response) => { res.json({ ok: true }); });
 // Razorpay webhook: raw body (signature is over the exact bytes), mounted before the JSON parser
 app.post("/api/payments/webhook", express.raw({ type: "application/json", limit: "1mb" }), razorpayWebhook);
 
