@@ -23,6 +23,8 @@ services:
         sync: false # https://<service>.onrender.com
       - key: FRONTEND_URL
         value: easyplay://app
+      - key: GOOGLE_WEB_CLIENT_ID
+        sync: false # xxxx.apps.googleusercontent.com (Supabase Google provider client id)
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_ANON_KEY

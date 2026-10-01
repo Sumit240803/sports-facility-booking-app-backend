@@ -8,6 +8,9 @@ const router = express.Router();
 router.get('/oauth/callback', authController.oauthCallback);
 router.get('/oauth/:provider', authController.startOAuth);
 
+router.get('/google/config', authController.googleConfig);
+router.post('/google/token', authController.googleIdTokenSignIn);
+
 router.post('/refresh', authController.refreshSession);
 router.post('/logout', requireAuth, authController.logout);
 

@@ -87,6 +87,46 @@ export const oauthCallback = async (req: Request, res: Response): Promise<void> 
     res.redirect(`${env.frontendUrl}/auth/callback#${params.toString()}`);
 };
 
+// GET /auth/google/config
+// What the mobile app needs to start native Google Sign-In
+export const googleConfig = async (_req: Request, res: Response): Promise<void> => {
+    if (!env.googleWebClientId) { res.status(503).json({ error: 'Google sign-in is not configured' }); return; }
+    res.status(200).json({ web_client_id: env.googleWebClientId });
+};
+
+// POST /auth/google/token  { id_token, nonce? }
+// Native sign-in: the app gets a Google ID token from the OS account picker; Supabase verifies it
+// (audience, signature, nonce) and creates/returns the session. No browser, cookies or redirects.
+export const googleIdTokenSignIn = async (req: Request, res: Response): Promise<void> => {
+    const idToken = req.body?.id_token;
+    const nonce = req.body?.nonce;
+    if (typeof idToken !== 'string' || idToken.length < 20 || idToken.length > 8192) {
+        res.status(400).json({ error: 'id_token is required' });
+        return;
+    }
+    if (nonce !== undefined && (typeof nonce !== 'string' || nonce.length > 256)) {
+        res.status(400).json({ error: 'Invalid nonce' });
+        return;
+    }
+
+    const { client } = createAuthClient();
+    const { data, error } = await client.auth.signInWithIdToken({
+        provider: 'google',
+        token: idToken,
+        ...(nonce ? { nonce } : {}),
+    });
+    if (error || !data.session) { res.status(401).json({ error: error?.message ?? 'Google sign-in failed' }); return; }
+
+    const profile = await getOrCreateProfile(data.session.user);
+    if (profile.status === 'suspended') {
+        await supabaseAdmin.auth.admin.signOut(data.session.access_token, 'global');
+        res.status(403).json({ error: 'Account suspended' });
+        return;
+    }
+    await updateProfile(profile.id, { last_login_at: new Date().toISOString() });
+    res.status(200).json(await sessionResponse(data.session));
+};
+
 // POST /auth/refresh  { refresh_token }
 export const refreshSession = async (req: Request, res: Response): Promise<void> => {
     const refreshToken = req.body?.refresh_token;

@@ -18,6 +18,8 @@ export const env = {
     apiUrl: process.env.API_URL || `http://localhost:${Number(process.env.PORT) || 3000}`,
     // Frontend app URL, where users land after OAuth / magic link
     frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5173',
+    // OAuth Web client ID (the one configured on the Supabase Google provider). Mobile apps request ID tokens for it.
+    googleWebClientId: process.env.GOOGLE_WEB_CLIENT_ID || null,
     // Cloudflare R2 (S3-compatible) for venue photos
     r2: {
         accountId: required('R2_ACCOUNT_ID'),

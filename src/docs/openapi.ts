@@ -474,6 +474,18 @@ export const openApiSpec: Json = {
                 responses: { 302: { description: 'Redirect to frontend' } },
             }),
         },
+        '/auth/google/config': {
+            get: op('Auth', 'Native Google Sign-In config (mobile)', {
+                responses: { 200: ok('Web client id to request ID tokens for', obj({ web_client_id: { type: 'string' } })), 503: err('Google sign-in not configured') },
+            }),
+        },
+        '/auth/google/token': {
+            post: op('Auth', 'Sign in with a Google ID token (mobile)', {
+                description: 'Send the ID token from native Google Sign-In (requested for the web client id). If the app passed a hashed nonce to Google, send the raw nonce here.',
+                requestBody: body(obj({ id_token: { type: 'string' }, nonce: { type: 'string' } }, ['id_token'])),
+                responses: { 200: ok('Session', ref('Session')), 400: E[400], 401: E[401], 403: E[403] },
+            }),
+        },
         '/auth/refresh': {
             post: op('Auth', 'Refresh session', {
                 requestBody: body(obj({ refresh_token: { type: 'string' } }, ['refresh_token'])),
